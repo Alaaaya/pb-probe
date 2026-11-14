@@ -48,8 +48,8 @@ static BOOL allowed(NSString *path) {
 static BOOL allowedGrantTarget(NSString *path) {
     if (allowed(path)) return YES;
     NSArray *parts = path.pathComponents;
-    if (parts.count < 9) return NO;
-    NSString *container = [NSString pathWithComponents:[parts subarrayWithRange:NSMakeRange(0, 8)]];
+    if (parts.count < 8) return NO;
+    NSString *container = [NSString pathWithComponents:[parts subarrayWithRange:NSMakeRange(0, 7)]];
     if (!allowed(container) || ![[NSUUID alloc] initWithUUIDString:container.lastPathComponent]) return NO;
     NSString *suffix = [path substringFromIndex:container.length + 1];
     NSArray *exact = @[@".com.apple.mobile_container_manager.metadata.plist",
