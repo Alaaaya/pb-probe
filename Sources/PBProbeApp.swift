@@ -78,6 +78,10 @@ final class ProbeModel: ObservableObject {
     }
     func importFile(_ url: URL) {
         guard !busy else { return }
+        guard url.pathExtension.lowercased() == "tendies" else {
+            append("IMPORT ERROR · Select a .tendies wallpaper file.")
+            return
+        }
         busy = true
         Task {
             do {
@@ -141,7 +145,7 @@ struct ProbeView: View {
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
         .preferredColorScheme(.dark)
-        .fileImporter(isPresented: $picker, allowedContentTypes: [.data, .zip, .item]) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: [.item, .data, .zip]) { result in
             switch result {
             case .success(let url): model.importFile(url)
             case .failure(let error): model.append("PICKER ERROR · \(error.localizedDescription)")
