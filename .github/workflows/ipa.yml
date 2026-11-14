@@ -1,0 +1,34 @@
+name: PB Probe unsigned IPA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Compile and package unsigned IPA
+        run: |
+          set -euo pipefail
+          xcodebuild -project PBProbe.xcodeproj -scheme PBProbe -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p package/Payload
+          cp -R build/Build/Products/Release-iphoneos/PBProbe.app package/Payload/
+          cp PBProbe.entitlements package/Payload/PBProbe.app/RequestedEntitlements.plist
+          cd package
+          zip -qry ../PB-Probe.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PB-Probe-unsigned
+          path: PB-Probe.ipa
+          if-no-files-found: error
