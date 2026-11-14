@@ -43,6 +43,24 @@ static BOOL allowed(NSString *path) {
     return NO;
 }
 
+// A stale swap can only point at an allowlisted root/UUID, metadata, or
+// PosterBoard wallpaper-specific descendants. Never recover arbitrary links.
+static BOOL allowedGrantTarget(NSString *path) {
+    if (allowed(path)) return YES;
+    NSArray *parts = path.pathComponents;
+    if (parts.count < 9) return NO;
+    NSString *container = [NSString pathWithComponents:[parts subarrayWithRange:NSMakeRange(0, 8)]];
+    if (!allowed(container) || ![[NSUUID alloc] initWithUUIDString:container.lastPathComponent]) return NO;
+    NSString *suffix = [path substringFromIndex:container.length + 1];
+    NSArray *exact = @[@".com.apple.mobile_container_manager.metadata.plist",
+        @"com.apple.mobile_container_manager.metadata.plist", @"Library", @"Library/Application Support",
+        @"Library/Preferences", @"Library/Preferences/com.apple.PosterBoard.unprotectedUserDefaults.plist"];
+    NSString *store = @"Library/Application Support/PRBPosterExtensionDataStore";
+    return [path isEqualToString:path.stringByStandardizingPath] &&
+        ([exact containsObject:suffix] || [suffix isEqualToString:store] ||
+         [suffix hasPrefix:[store stringByAppendingString:@"/"]]);
+}
+
 @interface MirsaPBSession : NSObject
 @property(nonatomic) int64_t nativeHandle;
 @property(nonatomic, copy) NSString *target;
@@ -241,6 +259,7 @@ static int64_t query(uint64_t cls, NSString *identifier, BOOL group, NSString *d
 // it BEFORE using the canonical destination. Never retain an alias lease.
 static int64_t canonicalGrant(NSString *target, NSArray<NSString *> *groups, NSMutableString *log) {
     NSFileManager *fm = NSFileManager.defaultManager;
+    if (!allowedGrantTarget(target)) return -101;
     int64_t last = -106;
     for (NSString *group in groups) {
         NSString *root = [fm containerURLForSecurityApplicationGroupIdentifier:group].path;
@@ -259,8 +278,11 @@ static int64_t canonicalGrant(NSString *target, NSArray<NSString *> *groups, NSM
             [normalized(library.stringByResolvingSymlinksInPath) isEqualToString:normalized(library)];
         if (ready && existsNoFollow(backup, &original)) {
             NSString *old = [fm destinationOfSymbolicLinkAtPath:cache error:nil];
-            ready = S_ISDIR(original.st_mode) && !S_ISLNK(original.st_mode) && old &&
-                allowed(old) && restoreCaches(cache, backup, YES, old, log);
+            struct stat cacheState;
+            BOOL missing = !existsNoFollow(cache, &cacheState) && errno == ENOENT;
+            ready = S_ISDIR(original.st_mode) && !S_ISLNK(original.st_mode) &&
+                ((old && allowedGrantTarget(old)) || missing) &&
+                restoreCaches(cache, backup, YES, old, log);
         }
         if (ready) {
             had = existsNoFollow(cache, &original);
