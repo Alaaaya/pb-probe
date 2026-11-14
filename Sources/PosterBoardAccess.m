@@ -176,32 +176,75 @@ static NSArray<NSString *> *signedGroups(NSMutableString *log) {
     CopyEntitlement copy = (CopyEntitlement)dlsym(RTLD_DEFAULT, "SecTaskCopyValueForEntitlement");
     if (!create && security) create = (CreateTask)dlsym(security, "SecTaskCreateFromSelf");
     if (!copy && security) copy = (CopyEntitlement)dlsym(security, "SecTaskCopyValueForEntitlement");
-    NSMutableArray *groups = [NSMutableArray array];
     CFTypeRef task = create ? create(kCFAllocatorDefault) : NULL;
-    CFTypeRef value = task && copy ? copy(task, CFSTR("com.apple.security.application-groups"), NULL) : NULL;
-    CFTypeRef debug = task && copy ? copy(task, CFSTR("get-task-allow"), NULL) : NULL;
-    BOOL debugKnown = debug && CFGetTypeID(debug) == CFBooleanGetTypeID();
-    [log appendFormat:@"process get-task-allow: %@ (not required by placard-style)\n",
-        debugKnown ? (CFBooleanGetValue((CFBooleanRef)debug) ? @"YES" : @"NO") : @"UNAVAILABLE"];
-    if (debug) CFRelease(debug);
-    NSDictionary *embedded = embeddedEntitlements(log);
-    NSMutableArray *declared = [NSMutableArray array];
+    [log appendFormat:@"Entitlement acquisition: Security dlopen=%@ createSymbol=%@ copySymbol=%@ task=%@\n",
+        security ? @"YES" : @"NO", create ? @"YES" : @"NO", copy ? @"YES" : @"NO", task ? @"YES" : @"NO"];
+    CFErrorRef groupError = NULL, debugError = NULL;
+    CFTypeRef value = task && copy ? copy(task, CFSTR("com.apple.security.application-groups"), &groupError) : NULL;
+    CFTypeRef debug = task && copy ? copy(task, CFSTR("get-task-allow"), &debugError) : NULL;
     id process = value ? (__bridge id)value : nil;
-    if ([process isKindOfClass:NSArray.class]) [declared addObjectsFromArray:process];
-    else if ([process isKindOfClass:NSString.class]) [declared addObject:process];
+    [log appendFormat:@"Runtime application-groups status=%@ type=%@ value=%@ error=%@\n",
+        !task || !copy ? @"QUERY_UNAVAILABLE" : (value ? @"VALUE_RETURNED" : (groupError ? @"QUERY_ERROR" : @"NO_VALUE")),
+        process ? NSStringFromClass([process class]) : @"<none>", process ?: @"<none>",
+        groupError ? (__bridge id)groupError : @"<none>"];
+    [log appendFormat:@"Runtime get-task-allow value=%@ error=%@ (not required)\n",
+        debug ? (__bridge id)debug : @"<unavailable or absent>", debugError ? (__bridge id)debugError : @"<none>"];
+    NSDictionary *embedded = embeddedEntitlements(log);
     id fallback = embedded[@"com.apple.security.application-groups"];
-    if ([fallback isKindOfClass:NSArray.class]) [declared addObjectsFromArray:fallback];
-    NSString *own = [@"group." stringByAppendingString:NSBundle.mainBundle.bundleIdentifier ?: @""];
-    for (id item in declared) {
-        if (![item isKindOfClass:NSString.class] || ![item isEqualToString:own] || [groups containsObject:item]) continue;
-        NSURL *url = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:item];
-        [log appendFormat:@"own-group %@ container lookup = %@\n", item, url ? @"YES" : @"NO"];
-        if (url) [groups addObject:item];
+    [log appendFormat:@"Embedded application-groups status=%@ type=%@ value=%@\n",
+        fallback ? @"PRESENT" : @"KEY_ABSENT", fallback ? NSStringFromClass([fallback class]) : @"<none>",
+        fallback ?: @"<none>"];
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier ?: @"";
+    NSString *preferred = [@"group." stringByAppendingString:bundle];
+    [log appendFormat:@"Runtime bundle=%@ preferred group=%@ embedded application-identifier=%@\n",
+        bundle, preferred, embedded[@"application-identifier"] ?: @"<absent>"];
+    // A signer can change the bundle ID and/or provision a differently named own
+    // group. Do not discard a declared usable group merely for a naming mismatch.
+    // No guessed, foreign/system group is ever tried: only this executable's
+    // declared group.* values, still requiring the OS group-container lookup.
+    NSMutableOrderedSet *declared = [NSMutableOrderedSet orderedSet];
+    for (id source in @[process ?: NSNull.null, fallback ?: NSNull.null]) {
+        if ([source isKindOfClass:NSArray.class]) [declared addObjectsFromArray:source];
+        else if ([source isKindOfClass:NSString.class]) [declared addObject:source];
     }
+    if ([declared containsObject:preferred]) {
+        [declared removeObject:preferred]; [declared insertObject:preferred atIndex:0];
+    }
+    NSMutableArray *groups = [NSMutableArray array];
+    for (id item in declared) {
+        if (![item isKindOfClass:NSString.class] || ![item hasPrefix:@"group."] ||
+            [item containsString:@"/"] || [item containsString:@".."]) {
+            [log appendFormat:@"Group candidate rejected: invalid declared own-group identifier %@\n", item]; continue;
+        }
+        [log appendFormat:@"Declared group %@ naming=%@ runtimeListed=%@ embeddedListed=%@\n", item,
+            [item isEqualToString:preferred] ? @"PREFERRED" : @"DIFFERENT_FROM_BUNDLE_DERIVED_NAME",
+            [process isKindOfClass:NSArray.class] && [process containsObject:item] ? @"YES" : @"NO",
+            [fallback isKindOfClass:NSArray.class] && [fallback containsObject:item] ? @"YES" : @"NO"];
+        errno = 0;
+        NSURL *url = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:item];
+        int snapshot = errno;
+        [log appendFormat:@"containerURL group=%@ result=%@ errnoSnapshot=%d (%s); this API has no NSError output, errno is not an authoritative denial reason.\n",
+            item, url.path ?: @"NIL", snapshot, strerror(snapshot)];
+        if (url) {
+            struct stat st;
+            errno = 0; int rc = lstat(url.fileSystemRepresentation, &st); int statError = errno;
+            [log appendFormat:@"Group path lstat rc=%d errno=%d directory=%@ symlink=%@\n",
+                rc, statError, rc == 0 && S_ISDIR(st.st_mode) ? @"YES" : @"NO",
+                rc == 0 && S_ISLNK(st.st_mode) ? @"YES" : @"NO"];
+            [groups addObject:item];
+        }
+    }
+    if (declared.count == 0)
+        [log appendString:@"No group candidates in queried/runtime or parsed embedded entitlements. This is NOT proof the signer stripped them if either source is unavailable.\n"];
+    else if (groups.count == 0)
+        [log appendString:@"Declared groups exist but none returned an OS group container. This is distinct from a missing entitlement; exact provisioning cause is unknown.\n"];
+    if (groupError) CFRelease(groupError);
+    if (debugError) CFRelease(debugError);
     if (value) CFRelease(value);
+    if (debug) CFRelease(debug);
     if (task) CFRelease(task);
     if (security) dlclose(security);
-    [log appendFormat:@"signed usable app groups: %lu (no assumed group entitlement)\n", (unsigned long)groups.count];
+    [log appendFormat:@"signed usable app groups: %lu (OS container lookup required)\n", (unsigned long)groups.count];
     return groups;
 }
 
@@ -339,7 +382,7 @@ static MirsaPBSession *acquire(NSString *target, int64_t *errorCode, NSMutableSt
         return lease;
     }
     if (canonical == -108) { *errorCode = canonical; return nil; }
-    if (groups.count == 0) [log appendString:@"placard-style unavailable: no usable own signed app group. Re-signing must preserve/provision the group.\n"];
+    if (groups.count == 0) [log appendString:@"placard-style unavailable: no usable own signed app group. See entitlement-source and per-group OS lookup diagnostics; cause not established.\n"];
     NSString *dots = [@[@"..", @"..", @"..", @"..", @"..", @"..",
                         @"..", @"..", @"..", @"..", @"..", @".."] componentsJoinedByString:@"/"];
     NSString *traversal = [dots stringByAppendingString:target];

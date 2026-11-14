@@ -105,7 +105,7 @@ enum ProbeDiagnostics {
         let groupCount = hasOwnGroup(&details)
         if let details { log(String(cString: details)); freeProbeString(details) }
         guard groupCount > 0 else {
-            throw PosterBoardStore.failure("placard-style needs one usable own app group. Signing removed or failed to provision group.com.alaa.pbprobe. get-task-allow is NOT required.")
+            throw PosterBoardStore.failure("placard-style needs one usable own app group. See the entitlement acquisition, embedded group values and per-group containerURL results above. Cause is not established. get-task-allow is NOT required.")
         }
         // Listing a data-container parent may be denied even when exact-path
         // extensions work. Resolve UUID candidates on our own data volume first.
