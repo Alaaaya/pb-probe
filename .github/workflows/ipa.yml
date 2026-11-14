@@ -1,4 +1,4 @@
-name: PB Probe unsigned IPA
+name: PB Probe re-signable IPA
 on:
   push:
     branches: [main]
@@ -25,6 +25,17 @@ jobs:
           mkdir -p package/Payload
           cp -R build/Build/Products/Release-iphoneos/PBProbe.app package/Payload/
           cp PBProbe.entitlements package/Payload/PBProbe.app/RequestedEntitlements.plist
+          # Embed the requested group in a real ad-hoc signature so a signer can
+          # discover it. This is NOT a device provisioning grant.
+          codesign --force --sign - --entitlements PBProbe.entitlements \
+            --generate-entitlement-der package/Payload/PBProbe.app
+          codesign --verify --deep --strict package/Payload/PBProbe.app
+          codesign --display --entitlements :- package/Payload/PBProbe.app > embedded-entitlements.plist
+          python3 - <<'PYVERIFY'
+          import plistlib
+          p = plistlib.load(open("embedded-entitlements.plist", "rb"))
+          assert p == {"com.apple.security.application-groups": ["group.com.alaa.pbprobe"]}, p
+          PYVERIFY
           cd package
           zip -qry ../PB-Probe.ipa Payload
       - uses: actions/upload-artifact@v4

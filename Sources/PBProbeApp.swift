@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's group Caches and restores it.\n"
+    @Published var log = "PB Probe · placard-style v2 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -117,7 +117,7 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("POSTERBOARD / INSTALL LAB").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("POSTERBOARD / PLACARD-STYLE ACCESS").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))

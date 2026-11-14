@@ -1,5 +1,13 @@
 import Foundation
 
+@_silgen_name("mirsa_pb_candidates_copy_json")
+private func copyCandidateJSON() -> UnsafeMutablePointer<CChar>?
+@_silgen_name("mirsa_pb_has_own_group")
+private func hasOwnGroup(_ log: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> Int32
+@_silgen_name("mirsa_pb_access_free_string")
+private func freeProbeString(_ value: UnsafeMutablePointer<CChar>)
+
+
 enum IdentityRule: String, CaseIterable {
     case strict = "Strict"
     case metadataOrMarkers = "Metadata or markers"
@@ -28,7 +36,10 @@ enum ProbeDiagnostics {
         do { log("effective symlink destination = \(try fm.destinationOfSymbolicLink(atPath: root.path))") }
         catch { log("effective symlink lookup = \(describe(error))") }
         log("lease exact-path validation = \(lease.permits(root))")
+        lease.grantLayout()
+        log("container identity xattr = \(lease.identityAttribute() ?? "<unreadable>")")
         for name in metadata {
+            lease.grant(name)
             let file = root.appendingPathComponent(name)
             log("\(name) exists=\(fm.fileExists(atPath: file.path)) readable=\(fm.isReadableFile(atPath: file.path)) unredirected=\(lease.permits(file))")
             do {
@@ -45,7 +56,7 @@ enum ProbeDiagnostics {
             log("marker \(marker) exists=\(fm.fileExists(atPath: file.path)) unredirected=\(lease.permits(file))")
         }
         do {
-            let layout = try PosterBoardStore.layout(root)
+            let layout = try PosterBoardStore.layout(root, lease: lease)
             log("version=\(layout.version) providers=\(layout.providers.sorted())")
         } catch { log("Layout ERROR \(describe(error))") }
         for rule in IdentityRule.allCases {
@@ -61,8 +72,13 @@ enum ProbeDiagnostics {
             throw PosterBoardStore.failure("Markers require an active exact canonical-container lease.")
         }
         // A readable contradictory or malformed metadata file is NEVER overridden by markers.
+        lease.grantLayout()
+        if let attribute = lease.identityAttribute(), attribute != "com.apple.PosterBoard" {
+            throw PosterBoardStore.failure("Container identity attribute contradicts com.apple.PosterBoard.")
+        }
         var identified = false
         for name in metadata {
+            lease.grant(name)
             let file = root.appendingPathComponent(name)
             guard lease.permits(file) else { throw PosterBoardStore.failure("Redirected metadata rejected.") }
             if let data = try? Data(contentsOf: file) {
@@ -75,7 +91,7 @@ enum ProbeDiagnostics {
         }
         let store = root.appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore")
         guard lease.permits(store) else { throw PosterBoardStore.failure("Redirected PosterBoard store.") }
-        let layout = try PosterBoardStore.layout(root)
+        let layout = try PosterBoardStore.layout(root, lease: lease)
         let collection = layout.extensions.appendingPathComponent(provider)
         guard layout.providers.contains(provider), lease.permits(collection),
               try collection.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else {
@@ -85,40 +101,65 @@ enum ProbeDiagnostics {
         _ = identified
     }
     static func discover(log: @escaping (String) -> Void) throws -> String {
-        // Candidate finding deliberately does not impose the chosen identity rule.
-        // Diagnose must still be usable when strict validation is the failing step.
-        for root in PosterBoardStore.roots {
-            log("Scanning \(root)")
-            let parent: PosterBoardLease
-            do { parent = try PosterBoardLease(path: root, log: log) }
-            catch { log(describe(error)); continue }
-            let entries: [String]
-            do {
-                entries = try FileManager.default.contentsOfDirectory(atPath: parent.effectiveURL.path)
-                try parent.close()
-            } catch { try? parent.close(); log(describe(error)); continue }
-            for entry in entries.sorted() where UUID(uuidString: entry) != nil {
-                let path = root + "/" + entry
-                var detail = ""
-                do {
-                    let lease = try PosterBoardLease(path: path) { detail += $0 }
-                    let store = lease.effectiveURL.appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore")
-                    let hasMarker = FileManager.default.fileExists(atPath: store.path)
-                    var metadataMatch = false
-                    for name in metadata {
-                        if let d = try? Data(contentsOf: lease.effectiveURL.appendingPathComponent(name)),
-                           let obj = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any],
-                           obj["MCMMetadataIdentifier"] as? String == "com.apple.PosterBoard" { metadataMatch = true }
+        var details: UnsafeMutablePointer<CChar>?
+        let groupCount = hasOwnGroup(&details)
+        if let details { log(String(cString: details)); freeProbeString(details) }
+        guard groupCount > 0 else {
+            throw PosterBoardStore.failure("placard-style needs one usable own app group. Signing removed or failed to provision group.com.alaa.pbprobe. get-task-allow is NOT required.")
+        }
+        // Listing a data-container parent may be denied even when exact-path
+        // extensions work. Resolve UUID candidates on our own data volume first.
+        if let pointer = copyCandidateJSON() {
+            let json = String(cString: pointer)
+            freeProbeString(pointer)
+            if let data = json.data(using: .utf8),
+               let report = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                log("placard-style inode discovery visited=\(report["visitedInodes"] ?? "?") seconds=\(report["seconds"] ?? "?") limited=\(report["timeLimited"] ?? "?") UUIDs=\(report["UUIDContainersSeen"] ?? "?")")
+                if let error = report["error"] { log("discovery ERROR \(error)") }
+                let candidates = (report["matched"] as? [String] ?? []) + (report["unknown"] as? [String] ?? [])
+                var reportedAttempt = false
+                for raw in candidates {
+                    guard let path = try? PosterBoardStore.canonicalContainer(raw) else { continue }
+                    var trace = ""
+                    guard let lease = try? PosterBoardLease(path: path, log: { trace += $0 }) else {
+                        if !reportedAttempt { log(trace); reportedAttempt = true }
+                        continue
+                    }
+                    var match = lease.identityAttribute() == "com.apple.PosterBoard"
+                    var wrong = lease.identityAttribute().map { $0 != "com.apple.PosterBoard" } ?? false
+                    for name in metadata where !wrong {
+                        lease.grant(name)
+                        let file = lease.effectiveURL.appendingPathComponent(name)
+                        guard lease.permits(file), let bytes = try? Data(contentsOf: file),
+                              let object = try? PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any],
+                              let identifier = object["MCMMetadataIdentifier"] as? String else { continue }
+                        if identifier == "com.apple.PosterBoard" { match = true }
+                        else { wrong = true }
                     }
                     try lease.close()
-                    if hasMarker || metadataMatch {
-                        log(detail)
-                        log("Candidate found \(path), marker=\(hasMarker), metadata=\(metadataMatch)")
+                    if !reportedAttempt { log(trace); reportedAttempt = true }
+                    if match && !wrong {
+                        log(trace)
+                        log("placard-style PosterBoard candidate = \(path)")
                         return path
                     }
-                } catch { log("Candidate \(entry) lease/read ERROR \(describe(error))\n\(detail)") }
+                }
             }
         }
-        throw PosterBoardStore.failure("No PosterBoard candidate found. Paste a known container path to diagnose it directly.")
+        // Keep the old root-listing path as a bounded secondary discovery route.
+        for root in PosterBoardStore.roots {
+            guard let parent = try? PosterBoardLease(path: root) else { continue }
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: parent.effectiveURL.path)) ?? []
+            try parent.close()
+            for entry in entries.prefix(1024) where UUID(uuidString: entry) != nil {
+                let path = root + "/" + entry
+                guard let lease = try? PosterBoardLease(path: path) else { continue }
+                for name in metadata { lease.grant(name) }
+                let verified = (try? PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease)) != nil
+                try lease.close()
+                if verified { log("Root-listing candidate = \(path)"); return path }
+            }
+        }
+        throw PosterBoardStore.failure("No PosterBoard candidate identified. Paste a known canonical container path to diagnose directly.")
     }
 }

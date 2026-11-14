@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <mach-o/loader.h>
+#include <libkern/OSByteOrder.h>
 
 typedef void *(*Create)(void);
 typedef void (*SetNumber)(void *, uint64_t);
@@ -48,6 +50,8 @@ static BOOL allowed(NSString *path) {
 @property(nonatomic, copy) NSString *groupRoot;
 @property(nonatomic, copy) NSString *backup;
 @property(nonatomic) BOOL hadCaches;
+@property(nonatomic) BOOL canonicalGrant;
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *extraHandles;
 @end
 @implementation MirsaPBSession
 @end
@@ -99,6 +103,53 @@ static BOOL restoreCaches(NSString *caches, NSString *backup, BOOL hadCaches,
     return YES;
 }
 
+// Read only our on-disk executable. This fallback reports signature requests,
+// not provisioning grants; FileManager must still accept the actual own group.
+static NSDictionary *embeddedEntitlements(NSMutableString *log) {
+    NSData *data = [NSData dataWithContentsOfURL:NSBundle.mainBundle.executableURL
+                                       options:NSDataReadingMappedIfSafe error:nil];
+    if (data.length < sizeof(struct mach_header_64)) return @{};
+    const uint8_t *bytes = data.bytes;
+    struct mach_header_64 header;
+    memcpy(&header, bytes, sizeof(header));
+    if (header.magic != MH_MAGIC_64 || header.sizeofcmds > data.length - sizeof(header)) return @{};
+    NSUInteger end = sizeof(header) + header.sizeofcmds, offset = sizeof(header);
+    for (uint32_t i = 0; i < header.ncmds && offset <= end && end - offset >= sizeof(struct load_command); i++) {
+        struct load_command command;
+        memcpy(&command, bytes + offset, sizeof(command));
+        if (command.cmdsize < sizeof(command) || command.cmdsize > end - offset) return @{};
+        if (command.cmd == LC_CODE_SIGNATURE && command.cmdsize >= sizeof(struct linkedit_data_command)) {
+            struct linkedit_data_command signature;
+            memcpy(&signature, bytes + offset, sizeof(signature));
+            if (signature.dataoff > data.length || signature.datasize > data.length - signature.dataoff ||
+                signature.datasize < 12) return @{};
+            const uint8_t *blob = bytes + signature.dataoff;
+            uint32_t magic, length, count;
+            memcpy(&magic, blob, 4); memcpy(&length, blob + 4, 4); memcpy(&count, blob + 8, 4);
+            magic = OSSwapBigToHostInt32(magic); length = OSSwapBigToHostInt32(length); count = OSSwapBigToHostInt32(count);
+            if (magic != 0xfade0cc0 || length > signature.datasize || length < 12 || count > (length - 12) / 8) return @{};
+            for (uint32_t j = 0; j < count; j++) {
+                uint32_t at;
+                memcpy(&at, blob + 16 + j * 8, 4); at = OSSwapBigToHostInt32(at);
+                if (at > length || length - at < 8) continue;
+                uint32_t tag, size;
+                memcpy(&tag, blob + at, 4); memcpy(&size, blob + at + 4, 4);
+                tag = OSSwapBigToHostInt32(tag); size = OSSwapBigToHostInt32(size);
+                if (tag != 0xfade7171 || size < 8 || size > length - at) continue;
+                NSData *xml = [NSData dataWithBytes:blob + at + 8 length:size - 8];
+                id plist = [NSPropertyListSerialization propertyListWithData:xml options:0 format:NULL error:nil];
+                if ([plist isKindOfClass:NSDictionary.class]) {
+                    [log appendString:@"Embedded LC_CODE_SIGNATURE entitlement dictionary found (not a grant).\n"];
+                    return plist;
+                }
+            }
+        }
+        offset += command.cmdsize;
+    }
+    [log appendString:@"Embedded entitlement dictionary absent.\n"];
+    return @{};
+}
+
 static NSArray<NSString *> *signedGroups(NSMutableString *log) {
     typedef CFTypeRef (*CreateTask)(CFAllocatorRef);
     typedef CFTypeRef (*CopyEntitlement)(CFTypeRef, CFStringRef, CFErrorRef *);
@@ -111,19 +162,23 @@ static NSArray<NSString *> *signedGroups(NSMutableString *log) {
     CFTypeRef task = create ? create(kCFAllocatorDefault) : NULL;
     CFTypeRef value = task && copy ? copy(task, CFSTR("com.apple.security.application-groups"), NULL) : NULL;
     CFTypeRef debug = task && copy ? copy(task, CFSTR("get-task-allow"), NULL) : NULL;
-    BOOL debugAllowed = debug && CFGetTypeID(debug) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)debug);
-    [log appendFormat:@"actual signed get-task-allow: %@ (no entitlement is assumed or added)\n", debugAllowed ? @"YES" : @"NO"];
+    BOOL debugKnown = debug && CFGetTypeID(debug) == CFBooleanGetTypeID();
+    [log appendFormat:@"process get-task-allow: %@ (not required by placard-style)\n",
+        debugKnown ? (CFBooleanGetValue((CFBooleanRef)debug) ? @"YES" : @"NO") : @"UNAVAILABLE"];
     if (debug) CFRelease(debug);
-    if (value && CFGetTypeID(value) == CFArrayGetTypeID()) {
-        for (id group in (__bridge NSArray *)value) {
-            if ([group isKindOfClass:NSString.class] && [group length] > 0 &&
-                [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:group]) {
-                [groups addObject:group];
-            }
-        }
-    } else if (value && CFGetTypeID(value) == CFStringGetTypeID()) {
-        NSString *group = (__bridge NSString *)value;
-        if (group.length && [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:group]) [groups addObject:group];
+    NSDictionary *embedded = embeddedEntitlements(log);
+    NSMutableArray *declared = [NSMutableArray array];
+    id process = value ? (__bridge id)value : nil;
+    if ([process isKindOfClass:NSArray.class]) [declared addObjectsFromArray:process];
+    else if ([process isKindOfClass:NSString.class]) [declared addObject:process];
+    id fallback = embedded[@"com.apple.security.application-groups"];
+    if ([fallback isKindOfClass:NSArray.class]) [declared addObjectsFromArray:fallback];
+    NSString *own = [@"group." stringByAppendingString:NSBundle.mainBundle.bundleIdentifier ?: @""];
+    for (id item in declared) {
+        if (![item isKindOfClass:NSString.class] || ![item isEqualToString:own] || [groups containsObject:item]) continue;
+        NSURL *url = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:item];
+        [log appendFormat:@"own-group %@ container lookup = %@\n", item, url ? @"YES" : @"NO"];
+        if (url) [groups addObject:item];
     }
     if (value) CFRelease(value);
     if (task) CFRelease(task);
@@ -132,8 +187,8 @@ static NSArray<NSString *> *signedGroups(NSMutableString *log) {
     return groups;
 }
 
-static int64_t query(uint64_t queryClass, NSString *identifier, BOOL isGroup,
-                     NSString *partDomain, NSString *label, NSMutableString *log) {
+static int64_t queryFlags(uint64_t queryClass, NSString *identifier, BOOL isGroup,
+                     NSString *partDomain, uint64_t requestedFlags, NSString *label, NSMutableString *log) {
     static void *library;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -152,7 +207,7 @@ static int64_t query(uint64_t queryClass, NSString *identifier, BOOL isGroup,
     Consume consume = (Consume)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
     XString string = (XString)dlsym(RTLD_DEFAULT, "xpc_string_create");
     XRelease release = (XRelease)dlsym(RTLD_DEFAULT, "xpc_release");
-    if (!create || !cls || !ids || !flags || !part || !domain || !one ||
+    if (!create || !cls || !ids || !flags || !part || (partDomain.length && !domain) || !one ||
         !token || !destroy || !consume || !string || !release || !dlsym(RTLD_DEFAULT, "sandbox_extension_release")) { [log appendFormat:@"strategy %@: required symbol missing (-103)\n", label]; return -103; }
     void *q = create();
     if (!q) { [log appendFormat:@"strategy %@: query allocation failed (-104)\n", label]; return -104; }
@@ -164,7 +219,7 @@ static int64_t query(uint64_t queryClass, NSString *identifier, BOOL isGroup,
     part(q, 3);
     // Match Gester: empty domain means no setter call.
     if (partDomain.length) domain(q, partDomain.UTF8String);
-    flags(q, 0x8100000000ULL);
+    flags(q, requestedFlags);
     void *result = one(q);
     char *sandboxToken = result ? token(result) : NULL;
     // -106 is Mirsa's missing-result/token sentinel, NOT an OS errno.
@@ -176,11 +231,74 @@ static int64_t query(uint64_t queryClass, NSString *identifier, BOOL isGroup,
     return handle;
 }
 
+static int64_t query(uint64_t cls, NSString *identifier, BOOL group, NSString *domain,
+                     NSString *label, NSMutableString *log) {
+    return queryFlags(cls, identifier, group, domain, 0x8100000000ULL, label, log);
+}
+
+// Independent implementation from the documented behavior of worse_query.
+// Only our own signed group is used. Preserve the original cache and restore
+// it BEFORE using the canonical destination. Never retain an alias lease.
+static int64_t canonicalGrant(NSString *target, NSArray<NSString *> *groups, NSMutableString *log) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    int64_t last = -106;
+    for (NSString *group in groups) {
+        NSString *root = [fm containerURLForSecurityApplicationGroupIdentifier:group].path;
+        if (!root.length || ![normalized(root.stringByResolvingSymlinksInPath) isEqualToString:normalized(root)]) continue;
+        NSMutableSet *busy = busyGroups();
+        @synchronized(busy) {
+            if ([busy containsObject:root]) continue;
+            [busy addObject:root];
+        }
+        NSString *library = [root stringByAppendingPathComponent:@"Library"];
+        NSString *cache = [library stringByAppendingPathComponent:@"Caches"];
+        NSString *backup = [library stringByAppendingPathComponent:@"Caches.mirsa-pb-backup"];
+        BOOL had = NO;
+        struct stat original, installed, current;
+        BOOL ready = [fm createDirectoryAtPath:library withIntermediateDirectories:YES attributes:nil error:nil] &&
+            [normalized(library.stringByResolvingSymlinksInPath) isEqualToString:normalized(library)];
+        if (ready && existsNoFollow(backup, &original)) {
+            NSString *old = [fm destinationOfSymbolicLinkAtPath:cache error:nil];
+            ready = S_ISDIR(original.st_mode) && !S_ISLNK(original.st_mode) && old &&
+                allowed(old) && restoreCaches(cache, backup, YES, old, log);
+        }
+        if (ready) {
+            had = existsNoFollow(cache, &original);
+            ready = had ? S_ISDIR(original.st_mode) && [fm moveItemAtPath:cache toPath:backup error:nil] : errno == ENOENT;
+        }
+        if (ready) {
+            if (symlink(target.fileSystemRepresentation, cache.fileSystemRepresentation) != 0) {
+                [log appendFormat:@"placard-style cache symlink error errno=%d\n", errno];
+                if (had && ![fm moveItemAtPath:backup toPath:cache error:nil]) last = -108;
+            } else {
+                if (!existsNoFollow(cache, &installed) || !S_ISLNK(installed.st_mode)) {
+                    last = -108; // do not remove a concurrently replaced path
+                } else {
+                    last = queryFlags(7, group, YES, @"", 0x8000000000ULL, @"placard-style", log);
+                    if (last < 0 && NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26)
+                        last = queryFlags(7, group, YES, @"", 0x800000000ULL, @"placard-style-ios26", log);
+                    BOOL same = existsNoFollow(cache, &current) && S_ISLNK(current.st_mode) &&
+                        current.st_ino == installed.st_ino && current.st_dev == installed.st_dev;
+                    if (!same || !restoreCaches(cache, backup, had, target, log)) {
+                        releaseNative(last); last = -108;
+                    } else if (last >= 0) {
+                        [log appendFormat:@"placard-style canonical grant %@; own Caches restored immediately.\n", target];
+                    }
+                }
+            }
+        }
+        @synchronized(busy) { [busy removeObject:root]; }
+        if (last >= 0 || last == -108) return last;
+    }
+    return last;
+}
+
 static MirsaPBSession *session(NSString *target, int64_t handle) {
     MirsaPBSession *s = [MirsaPBSession new];
     s.nativeHandle = handle;
     s.target = target;
     s.effectivePath = target;
+    s.extraHandles = [NSMutableArray array];
     return s;
 }
 static MirsaPBSession *acquire(NSString *target, int64_t *errorCode, NSMutableString *log) {
@@ -189,6 +307,17 @@ static MirsaPBSession *acquire(NSString *target, int64_t *errorCode, NSMutableSt
     return nil;
 #else
     if (!allowed(target)) { *errorCode = -101; return nil; }
+    NSArray *groups = signedGroups(log);
+    int64_t canonical = canonicalGrant(target, groups, log);
+    if (canonical >= 0) {
+        MirsaPBSession *lease = session(target, canonical);
+        lease.canonicalGrant = YES;
+        [log appendFormat:@"placard-style resolved target = %@; root readable=%@ (metadata gets a separate token)\n",
+            target.stringByResolvingSymlinksInPath, canOpen(target) ? @"YES" : @"NO"];
+        return lease;
+    }
+    if (canonical == -108) { *errorCode = canonical; return nil; }
+    if (groups.count == 0) [log appendString:@"placard-style unavailable: no usable own signed app group. Re-signing must preserve/provision the group.\n"];
     NSString *dots = [@[@"..", @"..", @"..", @"..", @"..", @"..",
                         @"..", @"..", @"..", @"..", @"..", @".."] componentsJoinedByString:@"/"];
     NSString *traversal = [dots stringByAppendingString:target];
@@ -304,6 +433,30 @@ void *mirsa_pb_access_acquire(const char *rawPath, int64_t *errorCode, char **ou
         return s ? (__bridge_retained void *)s : NULL;
     }
 }
+// Only metadata and wallpaper-specific paths of this lease's exact container.
+// No arbitrary filesystem primitive is exposed to Swift.
+int32_t mirsa_pb_access_grant_relative(void *raw, const char *relative, char **outLog) {
+    MirsaPBSession *s = (__bridge MirsaPBSession *)raw;
+    NSMutableString *log = [NSMutableString string];
+    NSString *part = relative ? [NSString stringWithUTF8String:relative] : nil;
+    BOOL safe = part.length && ![part hasPrefix:@"/"] && [part isEqualToString:part.stringByStandardizingPath] &&
+        ![[part componentsSeparatedByString:@"/"] containsObject:@".."];
+    NSArray *specific = @[@".com.apple.mobile_container_manager.metadata.plist",
+        @"com.apple.mobile_container_manager.metadata.plist", @"Library", @"Library/Application Support",
+        @"Library/Preferences", @"Library/Preferences/com.apple.PosterBoard.unprotectedUserDefaults.plist"];
+    NSString *store = @"Library/Application Support/PRBPosterExtensionDataStore";
+    safe = safe && ([specific containsObject:part] || [part isEqualToString:store] ||
+        [part hasPrefix:[store stringByAppendingString:@"/"]]);
+    int32_t result = 0;
+    if (s && s.canonicalGrant && safe && ![s.target.lastPathComponent isEqualToString:@"Application"] &&
+        [[NSUUID alloc] initWithUUIDString:s.target.lastPathComponent]) {
+        NSString *target = [s.target stringByAppendingPathComponent:part];
+        int64_t h = canonicalGrant(target, signedGroups(log), log);
+        if (h >= 0) { [s.extraHandles addObject:@(h)]; result = 1; }
+    } else if (s && !s.canonicalGrant && safe) result = 1; // legacy recursive alias lease
+    if (outLog) *outLog = strdup(log.UTF8String);
+    return result;
+}
 char *mirsa_pb_access_copy_path(void *raw) {
     MirsaPBSession *s = (__bridge MirsaPBSession *)raw;
     return s ? strdup(s.effectivePath.UTF8String) : NULL;
@@ -314,6 +467,7 @@ char *mirsa_pb_access_release(void *raw) {
     if (!raw) return NULL;
     MirsaPBSession *s = CFBridgingRelease(raw);
     NSMutableString *log = [NSMutableString string];
+    for (NSNumber *h in s.extraHandles) releaseNative(h.longLongValue);
     releaseNative(s.nativeHandle);
     if (s.groupRoot) {
         restoreCaches(s.effectivePath, s.backup, s.hadCaches, s.target, log);
@@ -333,3 +487,12 @@ int32_t mirsa_pb_test_restore(const char *caches, const char *backup, int32_t ha
                          hadCaches != 0, [NSString stringWithUTF8String:target], [NSMutableString string]) ? 1 : 0;
 }
 #endif
+
+int32_t mirsa_pb_has_own_group(char **outLog) {
+    @autoreleasepool {
+        NSMutableString *log = [NSMutableString string];
+        int32_t count = (int32_t)signedGroups(log).count;
+        if (outLog) *outLog = strdup(log.UTF8String);
+        return count;
+    }
+}
