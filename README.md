@@ -43,10 +43,8 @@ A failed initial copy has uncertain ownership and is retained for review. Later
 rollback is allowed only with matching root inode/device and known contents.
 
 An old pending journal, original identifier 7400, matching normalized identifier,
-original descriptor UUID, or known prior test UUID blocks installation. Nothing
-clears journals, deletes old tests or overwrites existing wallpapers. Alaa's prior
-successful copy therefore remains a real blocker, not something this build
-silently works around. Do not remove it to force this test.
+original descriptor UUID, or known prior test UUID blocks installation. No install path clears journals, deletes old tests or overwrites existing wallpapers.
+Historical pending state blocks installation unless separately reconciled as described below.
 
 No refresh/respring mechanism is included. No preferences, gallery-index writes,
 registration IPC, reset or activation calls are added. Copy success is not gallery
@@ -55,3 +53,35 @@ No Mirsa edits, release publication or device execution is authorized here.
 
 
 The standalone parity build additionally offers a separately confirmed **Remove Prior Anime Test** operation. This is owner-approved only for descriptor BE2EE206-9948-4F2B-BD3E-C02042EDBC5D, journal B6DDAE7B-791A-4618-A85E-D9AC55BDF09E, CollectionsPoster store61. It checks strict container identity, the completed historical journal and archive hash, an independently pinned exact 26-file manifest, complete path inventory and current held inode identities. Extra/missing/changed files, links, redirects or unavailable evidence fail closed. A byte-verified synced backup and journal proof are retained BEFORE the first deletion. Removal uses held directory descriptors and individual no-follow checked unlink operations, never recursive deletion. Unexpected changes may stop partway; preserve evidence and never retry blindly. Only after verified target absence and lease close is this exact journal's pending marker renamed, preserving its contents. No other journal is cleared. No device execution has been performed. No automatic reinstall, index/preference write, reset or refresh is part of cleanup. Button presence and compile success do not prove device behavior.
+
+
+## Current v13 journal-only reconciliation
+
+The owner externally removed the historical wallpaper. Build18's read-only
+exact-path syscall observations found ENOENT. Those past observations alone do
+not authorize clearing any marker. The current explicit confirmation archives
+ONLY InstallTests/B6DDAE7B-791A-4618-A85E-D9AC55BDF09E/pending.json,
+after fresh conservative absence checks for descriptor BE2EE206 in store61
+using the existing diagnostic, strict container identity and unchanged grants.
+Presence, denial, redirects, journal changes and uncertain absence stop the action.
+
+Original completed-copy evidence, archive SHA and historical manifest must match.
+Held local directory/marker inodes and bytes are rechecked. Original journal bytes,
+a scope proof and the fresh observation transcript are synced locally. Only after
+successful lease close is the exact marker exclusively renamed to
+reconciled-absent-anime-pending.json in the SAME own-app journal directory.
+Existing archive destinations, including dangling links, are never overwritten.
+No PosterBoard files are written or removed by reconciliation. No new access
+mechanism, preferences, indexes, reset, refresh or Mirsa changes are introduced.
+The older removal action is disabled in both UI and model.
+
+Same-certificate UPDATE in place, without deleting the app or its data.
+Choose Reconcile Prior Anime Journal, confirm, then Copy Log and STOP.
+Do not import/install until the actual result has been reviewed. After successful
+reconciliation in the same process session, the existing approved Import and
+separately confirmed Test Install become available. Installation never autoruns.
+Relaunch intentionally resets this UI eligibility; do not delete evidence or
+repeat reconciliation blindly if pending has already been archived.
+Absence is a conservative point-in-time observation, not a guarantee against a
+future external writer. Existing install duplicate and pending-journal guards
+remain. Neither build success nor copy success proves device/gallery behavior.

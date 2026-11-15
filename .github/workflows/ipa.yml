@@ -39,6 +39,10 @@ jobs:
         run: |
           python3 Tests/absence-diagnostic.py
           swift /tmp/pb-absence-fixtures.swift
+      - name: Verify exact own-app journal reconciliation
+        run: |
+          python3 Tests/reconcile-journal.py
+          swift /tmp/pb-reconcile-fixtures.swift
       - name: Verify read-only gallery observation
         run: |
           python3 Tests/gallery-audit.py

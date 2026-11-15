@@ -4,7 +4,9 @@ import Darwin
 /// Read-only observation of the exact historical descriptor. Never reconciles
 /// its pending marker, calls removal, or treats permission errors as absence.
 enum ProbeAnimeAbsenceDiagnostic {
-    static func run(path: String, log: @escaping (String) -> Void) throws {
+    static func run(path: String, log output: @escaping (String) -> Void, requireAbsence: Bool = false) throws -> String {
+        var transcript = ""
+        let log: (String) -> Void = { line in transcript += line + "\n"; output(line) }
         let canonical = try PosterBoardStore.canonicalContainer(path)
         guard canonical == path, try ProbeDiagnostics.identifiesPosterBoard(path, log: log) else {
             throw PosterBoardStore.failure("Absence diagnostic requires strict PosterBoard identity.")
@@ -41,12 +43,24 @@ enum ProbeAnimeAbsenceDiagnostic {
             guard lease.permits(parent) else {
                 throw PosterBoardStore.failure("Absence diagnostic parent ancestry invalid; absence UNKNOWN.")
             }
-            _ = observe(parent: parent, name: owner.descriptor, log: log)
+            let classification = observe(parent: parent, name: owner.descriptor, log: log)
+            if requireAbsence {
+                guard classification == "ENOENT_OBSERVED_EXACT_PATH",
+                      try ProbeDiagnostics.identifiesPosterBoard(path, log: log),
+                      lease.permits(parent) else {
+                    throw PosterBoardStore.failure("Exact historical absence not validated; pending preserved.")
+                }
+                try PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease, rule: .strict)
+                guard observe(parent: parent, name: owner.descriptor, log: log) == "ENOENT_OBSERVED_EXACT_PATH" else {
+                    throw PosterBoardStore.failure("Final absence recheck failed; pending preserved.")
+                }
+            }
             guard try owner.localRead(pending, limit: 65_536) == record else {
                 throw PosterBoardStore.failure("Journal changed externally during read-only observation; no reconciliation performed.")
             }
             try lease.close()
             log("AUDIT ABSENCE COMPLETE · lease closed; pending journal byte-identical; no removal/install/refresh attempted. Copy Log and stop.")
+            return transcript
         } catch {
             do { try lease.close() } catch { log("CLEANUP ERROR · \(error.localizedDescription)") }
             throw error

@@ -9,10 +9,11 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · READ-ONLY ANIME ABSENCE v12 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · EXACT ANIME JOURNAL RECONCILE v13 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
+    @Published var reconciled = false
     @Published var importError: String?
     
     func append(_ text: String) {
@@ -21,16 +22,16 @@ final class ProbeModel: ObservableObject {
             log = "LOG DISPLAY bounded to newest 160k characters\n" + String(log.suffix(160_000))
         }
     }
-    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false) {
-        guard !apply && !install && !cleanup else {
-            append("RESULT BLOCKED · writes disabled in this read-only diagnostic build. Journal preserved.")
+    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false, reconcile: Bool = false) {
+        guard !apply && !cleanup && (!install || reconciled) else {
+            append("RESULT BLOCKED · access/removal disabled; Test Install requires successful exact journal reconciliation in this session.")
             return
         }
         guard !busy else { return }
         busy = true
         let entered = container
         let selectedArchive = archive
-        append("\n\(absence ? "READ-ONLY ANIME ABSENCE" : "SESSION")\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        append("\n\(reconcile ? "EXACT JOURNAL RECONCILIATION" : (absence ? "READ-ONLY ANIME ABSENCE" : "SESSION"))\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -53,8 +54,10 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    if absence {
-                        try ProbeAnimeAbsenceDiagnostic.run(path: path, log: logger)
+                    if reconcile {
+                        try ProbeAnimeJournalReconcile.run(path: path, log: logger)
+                    } else if absence {
+                        _ = try ProbeAnimeAbsenceDiagnostic.run(path: path, log: logger)
                     } else if cleanup {
                         try ProbeOwnedAnimeCleanup.run(path: path, log: logger)
                     } else if audit {
@@ -73,10 +76,14 @@ final class ProbeModel: ObservableObject {
                 logBuffer.flush()
                 if absence { append("RESULT ABSENCE DIAGNOSTIC COMPLETE · read the AUDIT ABSENCE observations, not proof of cleanup. Journal unchanged; no removal/install/refresh performed. Copy Log and stop.") }
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
+                if reconcile {
+                    reconciled = true
+                    append("RESULT JOURNAL RECONCILE PASS · only own-app historical pending marker archived. No wallpaper installed or deleted. Copy Log and stop before a separate parity test.")
+                }
                 container = path
                 // Terminal result is emitted on the UI actor, outside log backpressure.
                 if cleanup { append("RESULT OWNED CLEANUP PASS · exact prior Anime test descriptor removed and matching pending marker archived; all evidence retained. No other wallpaper/index/preferences changed. No reinstall or refresh performed.") }
-                if !audit && !cleanup && !absence { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
+                if !audit && !cleanup && !absence && !reconcile { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
                     : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")) }
             } catch {
@@ -147,6 +154,7 @@ struct ProbeView: View {
     @State private var confirm = false
     @State private var confirmInstall = false
     @State private var confirmCleanup = false
+    @State private var confirmReconcile = false
     private let acid = Color(red: 0.73, green: 0.98, blue: 0.31)
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -155,26 +163,26 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("READ-ONLY / EXACT PRIOR ANIME").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("EXACT OWN JOURNAL / EXPLICIT RECONCILIATION").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY · installation and removal DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · removal DISABLED · install gated by reconciliation").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
                     picker = true
-                }.disabled(true)
+                }.disabled(model.busy || !model.reconciled)
                 Button("Diagnose") { model.run(apply: false) }
                 Button("Check Prior Anime") { model.run(apply: false, absence: true) }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
-                    .buttonStyle(.bordered).tint(acid).disabled(true)
+                    .buttonStyle(.bordered).tint(acid).disabled(model.busy || !model.reconciled)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
-            Button("Remove Prior Anime Test", role: .destructive) { confirmCleanup = true }
-                .buttonStyle(.bordered).font(.caption.bold()).disabled(true)
+            Button("Reconcile Prior Anime Journal") { confirmReconcile = true }
+                .buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy || model.reconciled)
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -184,7 +192,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("READ-ONLY diagnostic, device-untested. Check Prior Anime reads the exact historical path and reports syscall errors. No deletion, installation, journal clearing, preferences/index edits or refresh. Copy Log and stop. Access acquisition still temporarily swaps and restores this app’s own group Caches.")
+            Text("Device-untested. Reconcile archives ONLY the exact old own-app pending marker after fresh absence checks and lease close, keeping all evidence. No PosterBoard deletion/writes in reconciliation. Copy Log and stop first. Import and Test Install unlock only after success in this session and require separate confirmation. Check Prior Anime stays read-only. No preferences/index edits or refresh.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -213,11 +221,11 @@ struct ProbeView: View {
         } message: {
             Text("Copies one approved Anime-Squad descriptor with archived file attributes, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
         }
-        .alert("Remove ONLY the prior Anime test?", isPresented: $confirmCleanup) {
+        .alert("Archive ONLY the old test journal marker?", isPresented: $confirmReconcile) {
             Button("Cancel", role: .cancel) {}
-            Button("Remove Prior Anime Test", role: .destructive) { model.run(apply: false, cleanup: true) }
+            Button("Reconcile Journal") { model.run(apply: false, reconcile: true) }
         } message: {
-            Text("Deletes ONLY the old Anime test copy BE2EE206 in CollectionsPoster store 61, with the exact matching B6DDAE7B journal. Its full original file manifest, journal and container identity must match or removal stops. A verified backup and all journal evidence stay in Files. Other wallpapers, preferences and gallery indexes are untouched. No reset, refresh, or reinstall. This is device-untested. After this step, Copy Log and stop. Continue?")
+            Text("Rechecks that the exact prior Anime BE2EE206 is absent in store 61. If present, denied, redirected or uncertain, stops and keeps pending. Only this app's B6DDAE7B pending marker is archived, with original journal, archive and absence proof retained. No wallpaper files are deleted or written. No indexes, preferences, reset or refresh. Installation does NOT run automatically. After success, Copy Log and stop. Continue?")
         }
         .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}
