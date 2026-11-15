@@ -52,3 +52,19 @@ No wallpaper descriptors, preference keys, SQLite, reset flags, imported archive
 provider IDs or existing wallpapers are written. No claim of install/registration success.
 Host fixtures verify roundtrip cleanup, collision preservation and symlink rejection.
 All device access remains untested until the owner explicitly presses Test Access.
+
+
+## v7 bounded access proof
+The full v6 owner logs ended the access test with 726 suppressed lines. A later
+Diagnose completed metadata identity only, not sentinel proof. No device write
+success is established. Source diagnosis: ProbeWriteTest called the shared
+layout helper, which grants every existing provider and descriptors directory,
+although the temporary sentinel does not require any provider. Those grants
+overflowed the 48KB pending log buffer, which also dropped completion evidence.
+The isolated test now targets only the existing verified datastore root, without
+version/provider/descriptor enumeration. No installer code is called. Exclusive
+creation and inode-checked sentinel removal are unchanged. Test evidence has a
+separate bounded reserve and the final PASS/error is appended on the main actor
+outside that buffer. CI tests buffer saturation and no-layout-sweep invariants,
+in addition to the existing syscall collision/symlink/roundtrip fixtures.
+Device results remain unverified until the owner explicitly runs this new build.

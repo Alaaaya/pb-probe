@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · isolated-access v6 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · isolated-access v7 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -58,9 +58,13 @@ final class ProbeModel: ObservableObject {
                 }.value
                 logBuffer.flush()
                 container = path
+                // Terminal result is emitted on the UI actor, outside log backpressure.
+                append(apply
+                    ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
+                    : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")
             } catch {
                 logBuffer.flush()
-                append("ERROR · \(ProbeDiagnostics.describe(error))")
+                append("RESULT ERROR · \(ProbeDiagnostics.describe(error)) · access test not confirmed successful.")
             }
             busy = false
         }
@@ -183,7 +187,7 @@ struct ProbeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Test Access") { model.run(apply: true) }
         } message: {
-            Text("Only after strict identity checks, create one unique temporary test file in the existing PosterBoard store, verify its bytes, then remove only that file. No wallpaper is installed. A journal is saved in Files. If interrupted, the log identifies any leftover test file.")
+            Text("Only after strict identity checks, create one unique temporary test file in the existing PosterBoard datastore root, verify its bytes, then remove only that file. No wallpaper is installed. A journal is saved in Files. If interrupted, the log identifies any leftover test file.")
         }
     }
 }

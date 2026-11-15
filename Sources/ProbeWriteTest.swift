@@ -10,13 +10,9 @@ enum ProbeWriteTest {
         let lease = try PosterBoardLease(path: path, log: log)
         do {
             try PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease, rule: .strict)
-            let layout = try PosterBoardStore.layout(lease.effectiveURL, lease: lease)
-            guard layout.providers.contains(ProbeDiagnostics.provider) else {
-                throw PosterBoardStore.failure("Existing CollectionsPoster required. Nothing written.")
-            }
-            // Hidden non-descriptor file in the existing version directory.
-            // No descriptors, preferences, SQLite, provider IDs or wallpaper state touched.
-            let relative = "Library/Application Support/PRBPosterExtensionDataStore/\(layout.version)"
+            // Access proof needs only the already-validated store directory.
+            // Do not enumerate versions, providers or descriptor directories.
+            let relative = "Library/Application Support/PRBPosterExtensionDataStore"
             let parent = lease.effectiveURL.appendingPathComponent(relative)
             let name = ".pb-probe-access-" + UUID().uuidString
             let target = parent.appendingPathComponent(name)
@@ -39,7 +35,7 @@ enum ProbeWriteTest {
                   lease.permits(target) else {
                 throw PosterBoardStore.failure("Identity/path changed before write. Nothing written.")
             }
-            log("TEST BEFORE exclusive sentinel create; existing version=\(layout.version); journal=\(journal.lastPathComponent)")
+            log("TEST BEFORE exclusive sentinel create; exact existing datastore root; journal=\(journal.lastPathComponent)")
             try exclusiveRoundTrip(target, payload: payload, log: log)
             try Data("PASS write/readback/cleanup; no wallpaper installed".utf8)
                 .write(to: journal.appendingPathComponent("complete.txt"), options: .atomic)
