@@ -9,7 +9,7 @@ assert 'let relative = "Library/Application Support/PRBPosterExtensionDataStore"
 assert "O_EXCL" in s and "O_NOFOLLOW" in s
 assert "current.st_ino == owned.st_ino" in s
 app = Path("Sources/PBProbeApp.swift").read_text()
-assert 'append(apply' in app and "RESULT PASS" in app and "RESULT ERROR" in app
+assert 'append(install' in app and "RESULT PASS" in app and "RESULT ERROR" in app
 buffer = Path("Sources/ProbeLogBuffer.swift").read_text()
 fixture = r'''
 final class Box: @unchecked Sendable { var text = "" }

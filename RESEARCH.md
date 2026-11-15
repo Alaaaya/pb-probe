@@ -68,3 +68,34 @@ separate bounded reserve and the final PASS/error is appended on the main actor
 outside that buffer. CI tests buffer saturation and no-layout-sweep invariants,
 in addition to the existing syscall collision/symlink/roundtrip fixtures.
 Device results remain unverified until the owner explicitly runs this new build.
+
+
+## v8 separately confirmed copy-only install test
+Owner v7 device log established sentinel write/readback/removal and lease close.
+Reference inspected read-only at Placard 7f470dd: WallpaperInstaller invokes
+writeDescriptors, which copies descriptor directories to one existing provider.
+There is NO preference edit, registration IPC, locale/protection reset or respring
+in that path. Therefore the legacy PosterBoardStore.install preferences-writing
+path is deliberately NOT called. No GPL source was copied; independent code uses
+the documented behavior and the existing archive validation/manifest utilities.
+
+Only the exact approved Anime-Squad archive SHA256
+ddb823145d1d3fa20ff83dff10de37b6c8e6d454863aa6a81b2125139200b66a is accepted.
+One descriptor only, CollectionsPoster only, existing version/provider/descriptors
+directory only, with exact per-path grants and strict identity rechecked immediately
+before write. Archive bytes are backed up locally; extraction filters Finder debris.
+Wallpaper payload, numeric IDs and metadata remain unchanged, fresh UUID directory
+only. Existing descriptor identity 7400 or original UUID causes refusal, not numeric
+randomization. At most eight versions and 256 descriptor identities are checked.
+Any unreadable/unexpected identity blocks writes. No unknown providers are swept.
+
+Exclusive mkdir reserves the new UUID. SHA256 checks all copied files; rollback
+requires same inode/device plus only known unchanged source paths/content.
+Unknown partial writes or service-added files/directories are retained for review,
+never blindly deleted. Pending journal blocks all subsequent install attempts,
+including after success, until reviewed. No automatic cleanup or retries.
+
+The Test Install confirmation is separate from Test Access and Diagnose.
+COPY PASS and gallery/activation proof are explicitly different. The owner must
+open the picker manually once and report whether the item appears and works.
+No refresh/reset behavior is guessed. Actual device installation remains UNTESTED.

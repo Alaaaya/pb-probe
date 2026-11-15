@@ -16,7 +16,7 @@ final class ProbeLogBuffer: @unchecked Sendable {
         lock.lock()
         // Reserve room for bounded access-test evidence independently of the
         // noisy native checkpoints. Flush it last, including under backpressure.
-        if line.hasPrefix("TEST ") || line.hasPrefix("ACCESS TEST COMPLETE") || line.hasPrefix("CLEANUP ERROR") {
+        if line.hasPrefix("INSTALL TEST") || line.hasPrefix("TEST ") || line.hasPrefix("ACCESS TEST COMPLETE") || line.hasPrefix("CLEANUP ERROR") {
             evidence += line + (line.hasSuffix("\n") ? "" : "\n")
             if evidence.utf8.count > 16_000 { evidence = String(evidence.suffix(8_000)) }
         } else if pending.utf8.count < 48_000 {

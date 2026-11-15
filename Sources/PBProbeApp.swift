@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · isolated-access v7 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · isolated-install v8 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -21,11 +21,12 @@ final class ProbeModel: ObservableObject {
             log = "LOG DISPLAY bounded to newest 160k characters\n" + String(log.suffix(160_000))
         }
     }
-    func run(apply: Bool) {
+    func run(apply: Bool, install: Bool = false) {
         guard !busy else { return }
         busy = true
         let entered = container
-        append("\n\(apply ? "ACCESS TEST" : "DIAGNOSE") · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        let selectedArchive = archive
+        append("\n\(install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE")) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -48,7 +49,10 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    if apply {
+                    if install {
+                        guard let selectedArchive else { throw PosterBoardStore.failure("Import the approved Anime-Squad.tendies first.") }
+                        try ProbeInstallTest.run(path: path, archive: selectedArchive, log: logger)
+                    } else if apply {
                         try ProbeWriteTest.run(path: path, log: logger)
                     } else {
                         logger("DIAGNOSE COMPLETE · PosterBoard metadata identity verified; no root inspection or writes.")
@@ -59,12 +63,12 @@ final class ProbeModel: ObservableObject {
                 logBuffer.flush()
                 container = path
                 // Terminal result is emitted on the UI actor, outside log backpressure.
-                append(apply
+                append(install ? "RESULT COPY PASS · exact approved wallpaper files copied and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
-                    : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")
+                    : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes."))
             } catch {
                 logBuffer.flush()
-                append("RESULT ERROR · \(ProbeDiagnostics.describe(error)) · access test not confirmed successful.")
+                append("RESULT ERROR · \(ProbeDiagnostics.describe(error)) · operation not confirmed successful. Preserve the session log and InstallTests journal; do not retry blindly.")
             }
             busy = false
         }
@@ -128,6 +132,7 @@ struct ProbeView: View {
     @StateObject private var model = ProbeModel()
     @State private var picker = false
     @State private var confirm = false
+    @State private var confirmInstall = false
     private let acid = Color(red: 0.73, green: 0.98, blue: 0.31)
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -141,7 +146,7 @@ struct ProbeView: View {
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY ONLY · wallpaper installation disabled").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · separately confirmed copy-only installation").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
@@ -150,7 +155,10 @@ struct ProbeView: View {
                 Button("Diagnose") { model.run(apply: false) }
                 Button("Test Access") { confirm = true }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
-            if model.archive != nil { Text("ARCHIVE READY · not installed by this access test").font(.caption2.monospaced()).foregroundStyle(acid) }
+            if model.archive != nil {
+                Button("Test Install Anime-Squad") { confirmInstall = true }
+                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)
+                Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -160,7 +168,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Test Access writes, reads and removes one new hidden test file. Existing wallpapers and preferences stay untouched. Diagnose remains read-only.")
+            Text("Test Install adds one approved descriptor, without changing existing wallpapers or preferences. Open the wallpaper picker manually once afterwards. Copy PASS does not prove it is visible. Test Access remains temporary-file only.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -182,6 +190,12 @@ struct ProbeView: View {
             Button("OK") { model.importError = nil }
         } message: {
             Text(model.importError ?? "See session log.")
+        }
+        .alert("Add the approved wallpaper?", isPresented: $confirmInstall) {
+            Button("Cancel", role: .cancel) {}
+            Button("Test Install") { model.run(apply: false, install: true) }
+        } message: {
+            Text("Adds exactly one unchanged Anime-Squad descriptor after strict identity and duplicate checks. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
         }
         .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}

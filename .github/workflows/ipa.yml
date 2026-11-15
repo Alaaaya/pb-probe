@@ -23,6 +23,10 @@ jobs:
         run: |
           python3 Tests/bounded-access.py
           swift /tmp/pb-buffer-fixture.swift
+      - name: Verify isolated install copy safety
+        run: |
+          python3 Tests/install-fixtures.py
+          swift /tmp/pb-install-fixtures.swift
       - name: Generate project
         run: |
           brew install xcodegen

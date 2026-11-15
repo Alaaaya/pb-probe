@@ -1,0 +1,204 @@
+import Foundation
+import CryptoKit
+import Darwin
+
+/// One exact owner-provided archive; copy-only installation matching observed
+/// behavior. No registration IPC, preferences, reset, respring or payload edits.
+enum ProbeInstallTest {
+    static let approvedSHA256 = "ddb823145d1d3fa20ff83dff10de37b6c8e6d454863aa6a81b2125139200b66a"
+    static let provider = "com.apple.WallpaperKit.CollectionsPoster"
+    static let store = "Library/Application Support/PRBPosterExtensionDataStore"
+
+    static func run(path: String, archive: URL, log: @escaping (String) -> Void) throws {
+        let fm = FileManager.default
+        let testsRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("InstallTests")
+        if fm.fileExists(atPath: testsRoot.path) {
+            for old in try fm.contentsOfDirectory(at: testsRoot, includingPropertiesForKeys: nil) {
+                if fm.fileExists(atPath: old.appendingPathComponent("pending.json").path) {
+                    throw PosterBoardStore.failure("An earlier installation journal exists. One install test only; preserve it for review. Nothing written.")
+                }
+            }
+        }
+        let bytes = try Data(contentsOf: archive)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        guard digest == approvedSHA256 else {
+            throw PosterBoardStore.failure("This isolated test accepts only the approved Anime-Squad package, unchanged. Nothing written.")
+        }
+        let journal = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("InstallTests").appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: journal, withIntermediateDirectories: true)
+        // Recovery material remains local, including the original archive bytes.
+        try bytes.write(to: journal.appendingPathComponent("original.tendies"), options: .atomic)
+        let extracted = journal.appendingPathComponent("Extracted")
+        try fm.createDirectory(at: extracted, withIntermediateDirectories: false)
+        let parser = TendiesArchive()
+        try parser.extractValidatedArchive(archive, to: extracted)
+        let descriptors = parser.findDescriptorsWithExtensions(in: extracted, defaultExt: provider)
+        guard descriptors.count == 1, descriptors[0].ext == provider,
+              UUID(uuidString: descriptors[0].url.lastPathComponent) != nil else {
+            throw PosterBoardStore.failure("Expected exactly one CollectionsPoster UUID descriptor. Nothing written.")
+        }
+        let source = descriptors[0].url
+        let expected = try PosterBoardStore.manifest(source)
+        guard !expected.keys.contains(where: { $0.split(separator: "/").contains(".DS_Store") }) else {
+            throw PosterBoardStore.failure("Finder debris was not filtered. Nothing written.")
+        }
+        let sourceIdentifier = try String(contentsOf: source.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sourceIdentifier == "7400" else {
+            throw PosterBoardStore.failure("Approved descriptor identity differs. Nothing written.")
+        }
+        guard try ProbeDiagnostics.identifiesPosterBoard(path, log: log) else {
+            throw PosterBoardStore.failure("Strict PosterBoard metadata required. Nothing written.")
+        }
+        let lease = try PosterBoardLease(path: path, log: log)
+        do {
+            try PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease, rule: .strict)
+            let parentRelative = try destination(lease: lease)
+            let parent = lease.effectiveURL.appendingPathComponent(parentRelative)
+            // Check only this provider's descriptor identifiers, never sweep others.
+            let entries = try fm.contentsOfDirectory(atPath: parent.path).filter { !$0.hasPrefix(".") }
+            guard entries.count <= 256 else {
+                throw PosterBoardStore.failure("More than 256 descriptors; bounded duplicate check stopped. Nothing written.")
+            }
+            for entry in entries {
+                guard UUID(uuidString: entry) != nil else {
+                    throw PosterBoardStore.failure("Existing descriptor has an unexpected name; refusing to guess. Nothing written.")
+                }
+                let relative = parentRelative + "/" + entry
+                let metadata = relative + "/com.apple.posterkit.provider.descriptor.identifier"
+                guard lease.grant(relative), lease.grant(metadata),
+                      lease.permits(lease.effectiveURL.appendingPathComponent(metadata)) else {
+                    throw PosterBoardStore.failure("Cannot verify existing descriptor identity. Nothing written.")
+                }
+                let file = lease.effectiveURL.appendingPathComponent(metadata)
+                let info = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard info.isRegularFile == true, let size = info.fileSize, size <= 1024 else {
+                    throw PosterBoardStore.failure("Existing descriptor identity unreadable/oversized. Nothing written.")
+                }
+                let identifier = try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard identifier != sourceIdentifier,
+                      entry.caseInsensitiveCompare(source.lastPathComponent) != .orderedSame else {
+                    throw PosterBoardStore.failure("This wallpaper identity is already installed. Preserved it unchanged; no second registration attempted.")
+                }
+            }
+            let name = UUID().uuidString
+            let relative = parentRelative + "/" + name
+            let target = lease.effectiveURL.appendingPathComponent(relative)
+            guard lease.grant(relative), lease.permits(parent), lease.permits(target),
+                  try ProbeDiagnostics.identifiesPosterBoard(path, log: log) else {
+                throw PosterBoardStore.failure("Exact destination access or final identity check failed. Nothing written.")
+            }
+            let record: [String: Any] = ["container": path, "relative": relative,
+                "archiveSHA256": digest, "sourceIdentifier": sourceIdentifier,
+                "existingFilesModified": false, "preferencesModified": false,
+                "registrationIPC": false, "galleryVerified": false, "expected": expected]
+            try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+                .write(to: journal.appendingPathComponent("pending.json"), options: .atomic)
+            log("INSTALL TEST BEFORE exclusive new descriptor; journal=\(journal.lastPathComponent) relative=\(relative)")
+            try copyExclusive(source: source, target: target, expected: expected, log: log)
+            log("INSTALL TEST COPY PASS · \(expected.count) unchanged files verified by SHA-256. No preference or registration calls.")
+            try Data("COPY PASS; gallery visibility and activation UNVERIFIED".utf8)
+                .write(to: journal.appendingPathComponent("copy-pass.txt"), options: .atomic)
+            try lease.close()
+            try Data("COPY PASS and lease closed; gallery UNVERIFIED".utf8)
+                .write(to: journal.appendingPathComponent("complete.txt"), options: .atomic)
+            log("INSTALL TEST COMPLETE · lease closed. Open the wallpaper picker manually once. Copy success is NOT gallery/activation proof.")
+        } catch {
+            do { try lease.close() } catch { log("CLEANUP ERROR · \(error.localizedDescription)") }
+            throw error
+        }
+    }
+
+    /// Select only an existing numeric-version CollectionsPoster descriptors dir.
+    /// Unlike the legacy layout() helper, never grant/list every provider.
+    static func destination(lease: PosterBoardLease) throws -> String {
+        let fm = FileManager.default
+        guard lease.grant(store) else { throw PosterBoardStore.failure("Datastore grant failed.") }
+        let root = lease.effectiveURL.appendingPathComponent(store)
+        let versions = try fm.contentsOfDirectory(atPath: root.path).filter {
+            !$0.isEmpty && $0.utf8.allSatisfy { $0 >= 48 && $0 <= 57 } && Int($0) != nil
+        }.sorted { (Int($0) ?? 0) > (Int($1) ?? 0) }
+        guard versions.count <= 8 else { throw PosterBoardStore.failure("Ambiguous datastore versions; nothing written.") }
+        for version in versions {
+            let parts = [store + "/" + version, store + "/" + version + "/Extensions",
+                         store + "/" + version + "/Extensions/" + provider,
+                         store + "/" + version + "/Extensions/" + provider + "/descriptors"]
+            var valid = true
+            for part in parts {
+                let url = lease.effectiveURL.appendingPathComponent(part)
+                guard lease.grant(part), lease.permits(url) else { valid = false; break }
+                do {
+                    guard try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { valid = false; break }
+                } catch {
+                    let e = error as NSError
+                    if e.domain == NSCocoaErrorDomain &&
+                        (e.code == NSFileNoSuchFileError || e.code == NSFileReadNoSuchFileError) {
+                        valid = false; break
+                    }
+                    throw error
+                }
+            }
+            if valid { return parts[3] }
+        }
+        throw PosterBoardStore.failure("No existing CollectionsPoster descriptors directory. Refusing to create/guess provider registration.")
+    }
+
+    static func relativePaths(_ root: URL) throws -> Set<String> {
+        var error: Error?
+        guard let entries = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey],
+            errorHandler: { _, failure in error = failure; return false }) else {
+            throw PosterBoardStore.failure("Cannot enumerate owned tree.")
+        }
+        var paths = Set<String>()
+        for case let url as URL in entries {
+            guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                throw PosterBoardStore.failure("Redirected owned tree.")
+            }
+            paths.insert(String(url.path.dropFirst(root.path.count + 1)))
+        }
+        if let error { throw error }
+        return paths
+    }
+
+    /// Reserve the fresh root with exclusive mkdir; copy contents only after inode
+    /// ownership proof. On failure roll back only our still-owned, unchanged tree.
+    static func copyExclusive(source: URL, target: URL, expected: [String: String], log: (String) -> Void) throws {
+        let fm = FileManager.default
+        guard mkdir(target.path, S_IRWXU) == 0 else {
+            throw PosterBoardStore.failure("Exclusive descriptor directory create failed errno=\(errno); existing paths preserved.")
+        }
+        var owned = stat()
+        guard lstat(target.path, &owned) == 0, (owned.st_mode & S_IFMT) == S_IFDIR else {
+            throw PosterBoardStore.failure("Cannot prove created directory ownership; retained for journal review.")
+        }
+        do {
+            for name in try fm.contentsOfDirectory(atPath: source.path) {
+                try fm.copyItem(at: source.appendingPathComponent(name), to: target.appendingPathComponent(name))
+            }
+            guard try PosterBoardStore.manifest(target) == expected else {
+                throw PosterBoardStore.failure("Descriptor readback mismatch.")
+            }
+        } catch {
+            var current = stat()
+            let sameRoot = lstat(target.path, &current) == 0 &&
+                current.st_dev == owned.st_dev && current.st_ino == owned.st_ino &&
+                (current.st_mode & S_IFMT) == S_IFDIR
+            // Only exact complete source files may be removed, never an unknown
+            // partial write or files added by PosterBoard. Preserve on uncertainty.
+            let actual = try? PosterBoardStore.manifest(target)
+            let knownFiles = actual.map { found in found.allSatisfy { expected[$0.key] == $0.value } } ?? false
+            let expectedPaths = try? relativePaths(source)
+            let actualPaths = try? relativePaths(target)
+            let knownPaths = expectedPaths.flatMap { wanted in actualPaths.map { $0.isSubset(of: wanted) } } ?? false
+            let known = knownFiles && knownPaths
+            if sameRoot && known {
+                do { try fm.removeItem(at: target); log("INSTALL TEST ROLLBACK · only owned verified-copy directory removed") }
+                catch { log("CLEANUP ERROR · retained owned descriptor for journal review") }
+            } else {
+                log("CLEANUP ERROR · rollback refused uncertain ownership/content; preserve pending journal and do not retry")
+            }
+            throw error
+        }
+    }
+}
