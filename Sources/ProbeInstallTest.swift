@@ -146,7 +146,9 @@ enum ProbeInstallTest {
 
     static func relativePaths(_ root: URL) throws -> Set<String> {
         var error: Error?
-        guard let entries = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey],
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let prefix = canonicalRoot.path + "/"
+        guard let entries = FileManager.default.enumerator(at: canonicalRoot, includingPropertiesForKeys: [.isSymbolicLinkKey],
             errorHandler: { _, failure in error = failure; return false }) else {
             throw PosterBoardStore.failure("Cannot enumerate owned tree.")
         }
@@ -155,7 +157,8 @@ enum ProbeInstallTest {
             guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
                 throw PosterBoardStore.failure("Redirected owned tree.")
             }
-            paths.insert(String(url.path.dropFirst(root.path.count + 1)))
+            guard url.path.hasPrefix(prefix) else { throw PosterBoardStore.failure("Owned entry escaped canonical root.") }
+            paths.insert(String(url.path.dropFirst(prefix.count)))
         }
         if let error { throw error }
         return paths

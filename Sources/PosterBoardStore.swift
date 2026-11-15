@@ -245,7 +245,11 @@ enum PosterBoardStore {
         let rootInfo = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard rootInfo.isDirectory == true, rootInfo.isSymbolicLink != true else { throw failure("Descriptor root must be a real directory.") }
         var enumerationError: Error?
-        guard let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+        // Foundation may enumerate /var URLs as /private/var on Darwin.
+        // Use the same canonical root for enumeration and relative path slicing.
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL
+        let prefix = root.path + "/"
+        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                                              errorHandler: { _, error in enumerationError = error; return false }) else {
             throw failure("Cannot enumerate descriptor.")
         }
@@ -254,7 +258,8 @@ enum PosterBoardStore {
             let info = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard info.isSymbolicLink != true else { throw failure("Symbolic links are not allowed in wallpaper descriptors.") }
             if info.isRegularFile == true {
-                let relative = String(url.path.dropFirst(directory.path.count + 1))
+                guard url.path.hasPrefix(prefix) else { throw failure("Descriptor entry escaped canonical root.") }
+                let relative = String(url.path.dropFirst(prefix.count))
                 result[relative] = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
             }
         }
