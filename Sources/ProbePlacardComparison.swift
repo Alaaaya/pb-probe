@@ -27,64 +27,145 @@ enum ProbePlacardComparison {
            let text = String(data: json, encoding: .utf8) { return (text, text) }
         return (nil, String(decoding: data, as: UTF8.self))
     }
+    struct Limits {
+        var seconds: Double = 30
+        var grants = 128 // At most 128 extra retained handles, plus fixed identity/base lease.
+        var denials = 2
+        var entries = 512
+        var names = 256
+        var siblings = 12
+        var candidates = 2
+        var depth = 20
+        var bytes = 33_554_432
+    }
     static func run(path: String, log: @escaping (String) -> Void) throws -> String {
         let lease = try PosterBoardLease(path: path, log: log)
+        var report: String
         do {
             try PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease, rule: .strict)
-            let report = try collect(base: lease.effectiveURL, allow: { relative in
+            report = try collect(base: lease.effectiveURL, allow: { relative in
                 lease.grant(relative) && lease.permits(lease.effectiveURL.appendingPathComponent(relative))
-            })
-            try lease.close()
-            log("AUDIT COMPARE COMPLETE · lease closed; point-in-time read-only snapshot. No install/remove/refresh/preferences/index writes. Candidates are content matches, NOT proof of Placard provenance or visibility.")
-            return report
+            }, progress: log)
         } catch {
-            do { try lease.close() } catch { log("CLEANUP ERROR · \(error.localizedDescription)") }
-            throw error
+            report = render(entries: [:], notes: ["ERROR before collection: \(error.localizedDescription)"], exhausted: true)
         }
+        // Preserve even partial observations if cleanup itself fails. Never claim closure on failure.
+        do {
+            try lease.close()
+            report += "\nAUDIT COMPARE COMPLETE · lease closed; no writes; device/gallery unverified."
+        } catch {
+            report += "\nCLEANUP ERROR · \(error.localizedDescription) · incomplete=true; closure NOT verified."
+        }
+        log("COMPARE TERMINAL · returning evidence after cleanup attempt")
+        return report
     }
-    static func collect(base: URL, allow: (String) -> Bool) throws -> String {
+    static func collect(base: URL, allow: (String) -> Bool, limits: Limits = Limits(),
+                        now: () -> Double = { ProcessInfo.processInfo.systemUptime },
+                        progress: (String) -> Void = { _ in }) throws -> String {
         var entries: [String: Entry] = [:]
         var notes: [String] = []
         var count = 0
         var total = 0
         var exhausted = false
-        // Parent-by-parent exact grants, no native/access implementation changes.
-        let parts = store.split(separator: "/").map(String.init)
+        var attempts = 0
+        var denials = 0
+        var granted = Set<String>()
+        var rejected = Set<String>()
+        let started = now()
+        func available() -> Bool {
+            if exhausted { return false }
+            if now() - started >= limits.seconds || count >= limits.entries ||
+               denials >= limits.denials || total >= limits.bytes {
+                notes.append("LIMIT cooperative time/entry/denial/read budget")
+                exhausted = true
+                return false
+            }
+            return true
+        }
+        func permit(_ relative: String) -> Bool {
+            guard available() else { return false }
+            if granted.contains(relative) { return true }
+            if rejected.contains(relative) { return false }
+            guard attempts < limits.grants else {
+                notes.append("LIMIT total grant attempts=\(attempts); retained handles bounded")
+                exhausted = true; return false
+            }
+            attempts += 1
+            let ok = allow(relative)
+            if ok { granted.insert(relative) } else { denials += 1; rejected.insert(relative) }
+            progress("COMPARE COUNT grants=\(attempts) denied=\(denials) entries=\(entries.count) bytes=\(total)")
+            // A single native call cannot be preempted. Check again before any more work.
+            let remaining = available()
+            return ok && remaining
+        }
+        func finish() -> String {
+            notes.append("SCOPE CollectionsPoster/descriptors only; external index/reference search deliberately NOT performed")
+            notes.append("COUNTS grantAttempts=\(attempts) denials=\(denials) observedEntries=\(entries.count) bytes=\(total)")
+            return render(entries: entries, notes: notes, exhausted: exhausted)
+        }
+        progress("COMPARE PHASE ancestors · own pinned descriptor FIRST")
+        // Only exact necessary ancestors. Never enumerate store61 or other providers.
+        let parts = parent.split(separator: "/").map(String.init)
         for i in 1...parts.count {
-            guard allow(parts.prefix(i).joined(separator: "/")) else {
-                throw PosterBoardStore.failure("COMPARE existing bounded store grant denied/redirected")
+            guard permit(parts.prefix(i).joined(separator: "/")) else {
+                notes.append("DENIED/REDIRECTED ancestor; partial snapshot")
+                return finish()
             }
         }
-        let root = base.appendingPathComponent(store)
+        let root = base.appendingPathComponent(parent)
         let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard fd >= 0 else { throw PosterBoardStore.failure("COMPARE store61 open errno=\(errno)") }
+        guard fd >= 0 else { notes.append("DENIED descriptors open errno=\(errno)"); return finish() }
         defer { close(fd) }
         var held = stat()
-        guard fstat(fd, &held) == 0 else { throw PosterBoardStore.failure("COMPARE store fstat failed") }
+        guard fstat(fd, &held) == 0 else { notes.append("DENIED descriptors fstat"); return finish() }
+        enum Phase { case own, metadata, candidate }
+        let metadataNames: Set<String> = ["com.apple.posterkit.provider.descriptor.identifier",
+            "com.apple.posterkit.provider.identifierURL.suggestionMetadata.plist", "providerInfo.plist", "Wallpaper.plist"]
+        var phase = Phase.own
+        var candidateNames = Set<String>()
+        var siblingCount = 0
         func walk(_ directory: Int32, _ relative: String, _ depth: Int) {
-            guard depth <= 20, count < 8192 else { exhausted = true; return }
+            guard available() else { return }
+            guard depth <= limits.depth else { notes.append("LIMIT depth"); exhausted = true; return }
             let copied = dup(directory)
             guard copied >= 0 else { notes.append("DENIED dup \(relative)"); return }
             guard let stream = fdopendir(copied) else { close(copied); notes.append("DENIED list \(relative)"); return }
             defer { closedir(stream) }
+            rewinddir(stream)
             var names: [String] = []
             errno = 0
-            while let item = readdir(stream) {
+            // Do not enumerate any sibling before opening our exact pinned UUID.
+            if relative == parent && phase == .own { names = [ours] }
+            while !(relative == parent && phase == .own), available(), let item = readdir(stream) {
                 let name = withUnsafePointer(to: &item.pointee.d_name) {
                     $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
                 }
                 if name != "." && name != ".." {
-                    guard names.count < 8192 else { exhausted = true; break }
+                    guard names.count < limits.names else { notes.append("LIMIT shallow names"); exhausted = true; break }
                     names.append(name)
                 }
                 errno = 0
             }
             if errno != 0 { notes.append("DENIED readdir \(relative) errno=\(errno)") }
             for name in names.sorted() {
-                guard count < 8192 else { exhausted = true; return }
+                guard available() else { return }
+                if relative == parent {
+                    guard UUID(uuidString: name) != nil else { continue }
+                    switch phase {
+                    case .own: guard name == ours else { continue }
+                    case .metadata:
+                        guard name != ours else { continue }
+                        guard siblingCount < limits.siblings else { notes.append("LIMIT metadata sibling selection"); return }
+                        siblingCount += 1
+                    case .candidate: guard candidateNames.contains(name) else { continue }
+                    }
+                } else if phase == .metadata {
+                    // Root metadata only. No versions/assets or arbitrary subdirectories.
+                    guard depth == 1, metadataNames.contains(name) else { continue }
+                }
                 count += 1
                 let child = relative + "/" + name
-                guard !name.contains("/"), allow(child) else { notes.append("DENIED/REDIRECTED \(child)"); continue }
+                guard !name.contains("/"), permit(child) else { notes.append("DENIED/REDIRECTED \(child)"); continue }
                 var info = stat()
                 guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
                     notes.append("DENIED stat \(child) errno=\(errno)"); continue
@@ -101,11 +182,11 @@ enum ProbePlacardComparison {
                 }
                 var data: Data?
                 if kind == S_IFREG {
-                    if info.st_size >= 0 && info.st_size <= 8_388_608 && total + Int(info.st_size) <= 100_663_296 {
+                    if info.st_size >= 0 && info.st_size <= (phase == .metadata ? 65_536 : 8_388_608) && total + Int(info.st_size) <= limits.bytes {
                         var bytes = Data()
                         var buffer = [UInt8](repeating: 0, count: 65536)
                         var failed = false
-                        while bytes.count <= 8_388_608 {
+                        while available(), bytes.count <= 8_388_608 {
                             let got = Darwin.read(current, &buffer, buffer.count)
                             if got == 0 { break }
                             if got < 0 { failed = true; break }
@@ -118,7 +199,7 @@ enum ProbePlacardComparison {
                             after.st_mtimespec.tv_nsec == info.st_mtimespec.tv_nsec &&
                             after.st_size == info.st_size { data = bytes }
                         else { notes.append("CHANGED/UNREADABLE \(child)") }
-                    } else { notes.append("LIMIT payload unread \(child) bytes=\(info.st_size)"); exhausted = true }
+                    } else { notes.append("LIMIT payload unread \(child) bytes=\(info.st_size)") }
                 }
                 let attrCount = flistxattr(current, nil, 0, 0)
                 var attrs = "unavailable errno=\(errno)"
@@ -135,7 +216,7 @@ enum ProbePlacardComparison {
                 // Cross-check path still denotes the held fd before using it.
                 var check = stat()
                 var protection = "unavailable"
-                if allow(child), fstatat(directory, name, &check, AT_SYMLINK_NOFOLLOW) == 0,
+                if available(), fstatat(directory, name, &check, AT_SYMLINK_NOFOLLOW) == 0,
                    check.st_dev == info.st_dev, check.st_ino == info.st_ino {
                     #if os(iOS)
                     protection = (try? FileManager.default.attributesOfItem(atPath: base.appendingPathComponent(child).path)[.protectionKey])
@@ -151,20 +232,43 @@ enum ProbePlacardComparison {
                 if kind == S_IFDIR { walk(current, child, depth + 1) }
             }
         }
-        walk(fd, store, 0)
-        var final = stat()
-        guard allow(store), lstat(root.path, &final) == 0,
-              final.st_ino == held.st_ino, final.st_dev == held.st_dev else {
-            throw PosterBoardStore.failure("COMPARE store path changed during observation")
+        // Own full tree before granting any sibling UUID.
+        walk(fd, parent, 0)
+        phase = .metadata
+        progress("COMPARE PHASE bounded UUID root metadata · no unrelated provider/version traversal")
+        walk(fd, parent, 0)
+        for key in entries.keys.sorted() {
+            guard available() else { break }
+            let entry = entries[key]!
+            let prefix = parent + "/"
+            guard key.hasPrefix(prefix) else { continue }
+            let components = key.dropFirst(prefix.count).split(separator: "/")
+            guard components.count == 2, components[0] != Substring(ours) else { continue }
+            let title = entry.searchable.range(of: "Anime-Squad", options: .caseInsensitive) != nil ||
+                        entry.searchable.range(of: "Anime Squad", options: .caseInsensitive) != nil
+            let identifierMatch = components[1] == "com.apple.posterkit.provider.descriptor.identifier" &&
+                entry.hash != nil && entry.hash == ApprovedAnimeManifest.files[String(components[1])]
+            if title || identifierMatch {
+                if candidateNames.count < limits.candidates { candidateNames.insert(String(components[0])) }
+                else if !candidateNames.contains(String(components[0])) { notes.append("LIMIT candidate selection") }
+            }
         }
-        return render(entries: entries, notes: notes, exhausted: exhausted)
+        phase = .candidate
+        progress("COMPARE PHASE selected candidate trees=\(candidateNames.count)")
+        if !candidateNames.isEmpty { walk(fd, parent, 0) }
+        var final = stat()
+        if !available() || !permit(parent) || lstat(root.path, &final) != 0 ||
+           final.st_ino != held.st_ino || final.st_dev != held.st_dev {
+            notes.append("FINAL REVALIDATION FAILED/NOT COMPLETED · partial evidence retained")
+        }
+        return finish()
     }
     static func render(entries: [String: Entry], notes: [String], exhausted: Bool) -> String {
-        var lines = ["COMPARE WITH PLACARD v14 · READ ONLY · store61 · our UUID=\(ours)",
-                     "Snapshot bounded 8192 entries / depth20 / 8MiB per file / 96MiB total. Not atomic. No access expansion. Limits/denials mean incomplete, never absent."]
+        var lines = ["COMPARE WITH PLACARD v15 · READ ONLY · CollectionsPoster only · our UUID=\(ours)",
+                     "Snapshot defaults 30s cooperative / 128 grant attempts / 2 denials / 512 entries / 256 names per directory / 12 metadata siblings / 2 candidate trees / depth20 / 8MiB per file / 32MiB total. Native calls not preemptible. No access expansion. Limits mean incomplete, never absent."]
         let prefix = parent + "/"
         let siblings = entries.keys.filter { $0.hasPrefix(prefix) && !$0.dropFirst(prefix.count).contains("/") }.sorted()
-        lines.append("ALL DESCRIPTOR SIBLINGS (\(siblings.count))")
+        lines.append("BOUNDED OBSERVED DESCRIPTOR SIBLINGS (\(siblings.count))")
         for sibling in siblings { lines.append("\(sibling) \(entries[sibling]!.details)") }
         let oursPrefix = prefix + ours + "/"
         let ownFiles = entries.filter { $0.key.hasPrefix(oursPrefix) && $0.value.hash != nil }
@@ -180,7 +284,11 @@ enum ProbePlacardComparison {
                 $0.searchable.range(of: "Anime-Squad", options: .caseInsensitive) != nil ||
                 $0.searchable.range(of: "Anime Squad", options: .caseInsensitive) != nil
             }
-            if sameAssets >= 2 || titleMatch {
+            let identifierMatch = files.contains { key, value in
+                key.hasSuffix("/com.apple.posterkit.provider.descriptor.identifier") && value.hash != nil &&
+                    value.hash == ApprovedAnimeManifest.files["com.apple.posterkit.provider.descriptor.identifier"]
+            }
+            if sameAssets >= 2 || titleMatch || identifierMatch {
                 candidates.append(sibling)
                 lines.append("CANDIDATE \(sibling) equal non-plist payloads=\(sameAssets) titleMatch=\(titleMatch); provenance UNVERIFIED")
             }
@@ -196,7 +304,7 @@ enum ProbePlacardComparison {
             }
         }
         let ids = selected.map { String($0.dropFirst(prefix.count)) }
-        lines.append("REFERENCING FILES / OTHER DIRECTORIES UNDER STORE61")
+        lines.append("REFERENCES IN SELECTED SCOPE ONLY · external indexes NOT searched")
         for key in entries.keys.sorted() {
             let entry = entries[key]!
             let hits = ids.filter { entry.searchable.range(of: $0, options: .caseInsensitive) != nil || key.range(of: $0, options: .caseInsensitive) != nil }
