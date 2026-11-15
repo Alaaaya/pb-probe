@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · standalone-import-parity v10 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · standalone-parity-owned-cleanup v11 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -21,12 +21,12 @@ final class ProbeModel: ObservableObject {
             log = "LOG DISPLAY bounded to newest 160k characters\n" + String(log.suffix(160_000))
         }
     }
-    func run(apply: Bool, install: Bool = false, audit: Bool = false) {
+    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false) {
         guard !busy else { return }
         busy = true
         let entered = container
         let selectedArchive = archive
-        append("\n\(install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE")) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        append("\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -49,7 +49,9 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    if audit {
+                    if cleanup {
+                        try ProbeOwnedAnimeCleanup.run(path: path, log: logger)
+                    } else if audit {
                         try ProbeGalleryAudit.run(path: path, log: logger)
                     } else if install {
                         guard let selectedArchive else { throw PosterBoardStore.failure("Import the approved Anime-Squad.tendies first.") }
@@ -66,7 +68,8 @@ final class ProbeModel: ObservableObject {
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
                 container = path
                 // Terminal result is emitted on the UI actor, outside log backpressure.
-                if !audit { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
+                if cleanup { append("RESULT OWNED CLEANUP PASS · exact prior Anime test descriptor removed and matching pending marker archived; all evidence retained. No other wallpaper/index/preferences changed. No reinstall or refresh performed.") }
+                if !audit && !cleanup { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
                     : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")) }
             } catch {
@@ -136,6 +139,7 @@ struct ProbeView: View {
     @State private var picker = false
     @State private var confirm = false
     @State private var confirmInstall = false
+    @State private var confirmCleanup = false
     private let acid = Color(red: 0.73, green: 0.98, blue: 0.31)
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -162,6 +166,8 @@ struct ProbeView: View {
                 Button("Test Install") { confirmInstall = true }
                     .buttonStyle(.bordered).tint(acid).disabled(model.busy)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
+            Button("Remove Prior Anime Test", role: .destructive) { confirmCleanup = true }
+                .buttonStyle(.bordered).font(.caption.bold()).disabled(model.busy)
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -171,7 +177,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Standalone parity test. Import the approved Anime-Squad archive, then Test Install once and Copy Log. Any old test journal or duplicate blocks installation. Nothing is replaced or deleted. No refresh/respring; gallery visibility unverified.")
+            Text("Standalone, device-untested. The existing Anime copy/journal BLOCK Test Install. Separate confirmed removal handles ONLY the exact prior owned test, preserving a backup. Copy Log after that step; no automatic reinstall. No refresh/respring or promised gallery fix.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -199,6 +205,12 @@ struct ProbeView: View {
             Button("Test Install") { model.run(apply: false, install: true) }
         } message: {
             Text("Copies one approved Anime-Squad descriptor with archived file attributes, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
+        }
+        .alert("Remove ONLY the prior Anime test?", isPresented: $confirmCleanup) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove Prior Anime Test", role: .destructive) { model.run(apply: false, cleanup: true) }
+        } message: {
+            Text("Deletes ONLY the old Anime test copy BE2EE206 in CollectionsPoster store 61, with the exact matching B6DDAE7B journal. Its full original file manifest, journal and container identity must match or removal stops. A verified backup and all journal evidence stay in Files. Other wallpapers, preferences and gallery indexes are untouched. No reset, refresh, or reinstall. This is device-untested. After this step, Copy Log and stop. Continue?")
         }
         .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}

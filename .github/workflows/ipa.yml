@@ -31,6 +31,10 @@ jobs:
         run: |
           python3 Tests/import-parity.py
           swift run --package-path /tmp/pb-import-parity-fixtures ParityFixtures
+      - name: Verify exact owned Anime removal safeguards
+        run: |
+          python3 Tests/owned-cleanup.py
+          swift /tmp/pb-owned-cleanup-fixtures.swift
       - name: Verify read-only gallery observation
         run: |
           python3 Tests/gallery-audit.py
