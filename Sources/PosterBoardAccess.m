@@ -532,6 +532,80 @@ void *mirsa_pb_access_acquire(const char *rawPath, int64_t *errorCode, char **ou
         return s ? (__bridge_retained void *)s : NULL;
     }
 }
+// Identification-only endpoint. Call only for an xattr match or a
+// PosterBoard-specific path hint. Never exposes file contents/other identities.
+extern char *mirsa_pb_container_identifier(const char *path);
+char *mirsa_pb_target_identity_json(const char *raw) {
+    @autoreleasepool {
+        NSString *root = raw ? [NSString stringWithUTF8String:raw] : nil;
+        NSMutableDictionary *report = [NSMutableDictionary dictionary];
+        NSMutableArray *errors = [NSMutableArray array];
+        report[@"errors"] = errors;
+        if (!allowed(root) || ![[NSUUID alloc] initWithUUIDString:root.lastPathComponent]) {
+            report[@"invalid"] = @YES;
+        } else {
+            char *attribute = mirsa_pb_container_identifier(root.UTF8String);
+            BOOL wrongAttribute = attribute && strcmp(attribute, "com.apple.PosterBoard");
+            if (attribute) free(attribute);
+            if (wrongAttribute) {
+                report[@"matched"] = @NO;
+                report[@"contradiction"] = @YES;
+                [errors addObject:@"Target hint has another container identity xattr (redacted); no metadata grants attempted"];
+                NSData *data = [NSJSONSerialization dataWithJSONObject:report options:0 error:nil];
+                return strdup([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String ?: "{}");
+            }
+            NSMutableString *accessLog = [NSMutableString string];
+            NSArray *groups = signedGroups(accessLog);
+            NSString *identifier = nil;
+            BOOL contradiction = NO, restoreFailure = NO;
+            for (NSString *name in @[@".com.apple.mobile_container_manager.metadata.plist",
+                                     @"com.apple.mobile_container_manager.metadata.plist"]) {
+                NSString *path = [root stringByAppendingPathComponent:name];
+                checkpoint([NSString stringWithFormat:@"IDENTITY BEFORE exact metadata token %@", name]);
+                int64_t h = canonicalGrant(path, groups, accessLog);
+                if (h < 0) {
+                    [errors addObject:[NSString stringWithFormat:@"%@ token=%lld", name, (long long)h]];
+                    if (h == -108) { restoreFailure = YES; break; }
+                    continue;
+                }
+                @try {
+                    struct stat st;
+                    int rc = lstat(path.fileSystemRepresentation, &st), saved = errno;
+                    if (rc || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 1024*1024) {
+                        [errors addObject:[NSString stringWithFormat:@"%@ lstat=%d errno=%d regular=%@ size=%lld",
+                            name, rc, rc ? saved : 0, !rc && S_ISREG(st.st_mode) ? @"YES" : @"NO",
+                            rc ? -1LL : (long long)st.st_size]];
+                        continue;
+                    }
+                    NSString *resolved = normalized(path.stringByResolvingSymlinksInPath);
+                    if (![resolved isEqualToString:path]) {
+                        [errors addObject:[name stringByAppendingString:@" redirected path rejected"]];
+                        contradiction = YES; break;
+                    }
+                    NSError *error = nil;
+                    NSData *bytes = [NSData dataWithContentsOfFile:path options:NSDataReadingUncached error:&error];
+                    id plist = bytes ? [NSPropertyListSerialization propertyListWithData:bytes
+                        options:NSPropertyListImmutable format:nil error:&error] : nil;
+                    id value = [plist isKindOfClass:NSDictionary.class] ? plist[@"MCMMetadataIdentifier"] : nil;
+                    if (![value isKindOfClass:NSString.class] || ![value length]) {
+                        [errors addObject:[NSString stringWithFormat:@"%@ metadata read/parse %@ code=%ld; MCMMetadataIdentifier missing=%@",
+                            name, error.domain ?: @"no NSError", (long)error.code, value ? @"NO" : @"YES"]];
+                        continue;
+                    }
+                    if ([value isEqualToString:@"com.apple.PosterBoard"]) identifier = value;
+                    else { contradiction = YES; [errors addObject:[name stringByAppendingString:@" identifies OTHER container (identity redacted)"]]; }
+                    checkpoint(@"IDENTITY AFTER metadata read; only equality result retained");
+                } @finally { releaseNative(h); }
+            }
+            report[@"matched"] = @([identifier isEqualToString:@"com.apple.PosterBoard"] && !contradiction);
+            report[@"contradiction"] = @(contradiction);
+            report[@"restoreFailure"] = @(restoreFailure);
+            report[@"method"] = @"exact metadata files only; no candidate root token";
+        }
+        NSData *data = [NSJSONSerialization dataWithJSONObject:report options:0 error:nil];
+        return strdup([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String ?: "{}");
+    }
+}
 // Only metadata and wallpaper-specific paths of this lease's exact container.
 // No arbitrary filesystem primitive is exposed to Swift.
 int32_t mirsa_pb_access_grant_relative(void *raw, const char *relative, char **outLog) {

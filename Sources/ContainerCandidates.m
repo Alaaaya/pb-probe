@@ -31,13 +31,33 @@ static NSString *candidateIdentity(NSString *path) {
     return nil;
 }
 
+// Match complete path components, not substrings or arbitrary app names.
+static NSString *PBContainerFromPath(NSString *path) {
+    if ([path hasPrefix:@"/private/var/"]) path = [path substringFromIndex:8];
+    if (![path isEqualToString:path.stringByStandardizingPath]) return nil;
+    NSArray *parts = path.pathComponents;
+    if (parts.count < 7) return nil;
+    NSString *container = [NSString pathWithComponents:[parts subarrayWithRange:NSMakeRange(0, 7)]];
+    NSArray *roots = @[@"/var/mobile/Containers/Data/Application",
+        @"/var/mobile/Containers/Data/InternalDaemon", @"/var/mobile/Containers/Data/PluginKitPlugin"];
+    return [roots containsObject:container.stringByDeletingLastPathComponent] &&
+        [[NSUUID alloc] initWithUUIDString:container.lastPathComponent] ? container : nil;
+}
+static BOOL PBPosterHint(NSString *suffix) {
+    NSString *store = @"Library/Application Support/PRBPosterExtensionDataStore";
+    return [suffix isEqualToString:store] || [suffix hasPrefix:[store stringByAppendingString:@"/"]] ||
+        [suffix isEqualToString:@"Library/Preferences/com.apple.PosterBoard.plist"] ||
+        [suffix isEqualToString:@"Library/Preferences/com.apple.PosterBoard.unprotectedUserDefaults.plist"];
+}
+
 char *mirsa_pb_candidates_copy_json(void) {
     @autoreleasepool {
         mirsa_pb_progress("DISCOVERY C BEFORE scratch open/fstat/fstatfs");
-        NSMutableArray *unknown = [NSMutableArray array], *matched = [NSMutableArray array];
+        NSMutableArray *matched = [NSMutableArray array], *hinted = [NSMutableArray array];
+        NSUInteger unknownCount = 0, otherIdentityCount = 0;
         NSMutableSet *seen = [NSMutableSet set];
         NSMutableDictionary *report = [NSMutableDictionary dictionary];
-        report[@"unknown"] = unknown; report[@"matched"] = matched;
+        report[@"hinted"] = hinted; report[@"matched"] = matched;
         NSString *scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:
             [@"pb-inode-" stringByAppendingString:NSUUID.UUID.UUIDString]];
         int fd = open(scratch.fileSystemRepresentation, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
@@ -50,15 +70,19 @@ char *mirsa_pb_candidates_copy_json(void) {
         if (!ready || file.st_ino > UINT64_MAX - 100000) {
             report[@"error"] = [NSString stringWithFormat:@"own-volume probe failed errno=%d", saved];
         } else {
-            NSArray *roots = @[@"/var/mobile/Containers/Data/Application",
-                               @"/var/mobile/Containers/Data/InternalDaemon",
-                               @"/var/mobile/Containers/Data/PluginKitPlugin"];
             uint64_t limit = file.st_ino + 100000, visited = 0;
+            // Continue bounded, read-only inode discovery on the next Diagnose.
+            // Cursor is process-local; no other-app paths are persisted.
+            static uint64_t cursor = 1;
+            static fsid_t previousVolume;
+            if (memcmp(&previousVolume, &volume.f_fsid, sizeof(fsid_t)) || cursor > limit) cursor = 1;
+            previousVolume = volume.f_fsid;
+            report[@"startInode"] = @(cursor);
             NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
             BOOL stopped = NO;
             NSTimeInterval nextProgress = started + 1;
             char pathbuf[4096];
-            for (uint64_t inode = 1; inode <= limit; inode++) {
+            for (uint64_t inode = cursor; inode <= limit; inode++) {
                 visited = inode;
                 NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
                 if (now - started >= 6) { stopped = YES; break; }
@@ -72,18 +96,30 @@ char *mirsa_pb_candidates_copy_json(void) {
                 @autoreleasepool {
                     NSString *path = [NSString stringWithUTF8String:pathbuf];
                     if ([path hasPrefix:@"/private/var/"]) path = [path substringFromIndex:8];
-                    if (![roots containsObject:path.stringByDeletingLastPathComponent] ||
-                        ![[NSUUID alloc] initWithUUIDString:path.lastPathComponent] || [seen containsObject:path]) continue;
-                    [seen addObject:path];
-                    mirsa_pb_progress("DISCOVERY BEFORE candidate identity xattrs");
-                    NSString *identifier = candidateIdentity(path);
-                    mirsa_pb_progress("DISCOVERY AFTER candidate identity xattrs");
-                    if ([identifier isEqualToString:@"com.apple.PosterBoard"]) [matched addObject:path];
-                    else if (!identifier.length && unknown.count < 1024) [unknown addObject:path];
-                    // Never emit unrelated bundle identifiers or read unrelated files.
+                    NSString *container = PBContainerFromPath(path);
+                    if (!container) continue;
+                    if ([path isEqualToString:container] && ![seen containsObject:container]) {
+                        [seen addObject:container];
+                        NSString *identifier = candidateIdentity(container);
+                        if ([identifier isEqualToString:@"com.apple.PosterBoard"]) [matched addObject:container];
+                        else if (!identifier.length) unknownCount++;
+                        else otherIdentityCount++;
+                    } else if (path.length > container.length) {
+                        NSString *suffix = [path substringFromIndex:container.length + 1];
+                        BOOL posterHint = PBPosterHint(suffix);
+                        // A path name is only a hint, NEVER proof of identity.
+                        // No listing, open, grant or read of unknown app data.
+                        if (posterHint && ![hinted containsObject:container] && hinted.count < 8)
+                            [hinted addObject:container];
+                    }
                 }
                 if (matched.count) break;
             }
+            cursor = visited < limit ? visited + 1 : 1;
+            report[@"nextInode"] = @(cursor);
+            report[@"scanComplete"] = @(visited >= limit);
+            report[@"unknownIdentityCount"] = @(unknownCount);
+            report[@"otherIdentityCount"] = @(otherIdentityCount);
             report[@"visitedInodes"] = @(visited);
             report[@"timeLimited"] = @(stopped);
             report[@"seconds"] = @(NSProcessInfo.processInfo.systemUptime - started);

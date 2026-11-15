@@ -11,6 +11,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Verify exact discovery targeting
+        run: |
+          clang -fobjc-arc -framework Foundation Tests/DiscoveryTargets.m -o /tmp/pb-target-tests
+          /tmp/pb-target-tests
       - name: Generate project
         run: |
           brew install xcodegen
