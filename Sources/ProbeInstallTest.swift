@@ -176,8 +176,9 @@ enum ProbeInstallTest {
             for name in try fm.contentsOfDirectory(atPath: source.path) {
                 try fm.copyItem(at: source.appendingPathComponent(name), to: target.appendingPathComponent(name))
             }
-            guard try PosterBoardStore.manifest(target) == expected else {
-                throw PosterBoardStore.failure("Descriptor readback mismatch.")
+            let readback = try PosterBoardStore.manifest(target)
+            guard readback == expected else {
+                throw PosterBoardStore.failure("Descriptor readback mismatch. expected=\(expected) actual=\(readback)")
             }
         } catch {
             var current = stat()
