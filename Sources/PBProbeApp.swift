@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · standalone-parity-owned-cleanup v11 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · READ-ONLY ANIME ABSENCE v12 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -21,12 +21,16 @@ final class ProbeModel: ObservableObject {
             log = "LOG DISPLAY bounded to newest 160k characters\n" + String(log.suffix(160_000))
         }
     }
-    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false) {
+    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false) {
+        guard !apply && !install && !cleanup else {
+            append("RESULT BLOCKED · writes disabled in this read-only diagnostic build. Journal preserved.")
+            return
+        }
         guard !busy else { return }
         busy = true
         let entered = container
         let selectedArchive = archive
-        append("\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        append("\n\(absence ? "READ-ONLY ANIME ABSENCE" : "SESSION")\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -49,7 +53,9 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    if cleanup {
+                    if absence {
+                        try ProbeAnimeAbsenceDiagnostic.run(path: path, log: logger)
+                    } else if cleanup {
                         try ProbeOwnedAnimeCleanup.run(path: path, log: logger)
                     } else if audit {
                         try ProbeGalleryAudit.run(path: path, log: logger)
@@ -65,11 +71,12 @@ final class ProbeModel: ObservableObject {
 
                 }.value
                 logBuffer.flush()
+                if absence { append("RESULT ABSENCE DIAGNOSTIC COMPLETE · read the AUDIT ABSENCE observations, not proof of cleanup. Journal unchanged; no removal/install/refresh performed. Copy Log and stop.") }
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
                 container = path
                 // Terminal result is emitted on the UI actor, outside log backpressure.
                 if cleanup { append("RESULT OWNED CLEANUP PASS · exact prior Anime test descriptor removed and matching pending marker archived; all evidence retained. No other wallpaper/index/preferences changed. No reinstall or refresh performed.") }
-                if !audit && !cleanup { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
+                if !audit && !cleanup && !absence { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
                     : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")) }
             } catch {
@@ -148,26 +155,26 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("POSTERBOARD / PLACARD-STYLE ACCESS").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("READ-ONLY / EXACT PRIOR ANIME").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY · separately confirmed copy-only installation").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · installation and removal DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
                     picker = true
-                }
+                }.disabled(true)
                 Button("Diagnose") { model.run(apply: false) }
-                Button("Audit Gallery") { model.run(apply: false, audit: true) }
+                Button("Check Prior Anime") { model.run(apply: false, absence: true) }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
-                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)
+                    .buttonStyle(.bordered).tint(acid).disabled(true)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
             Button("Remove Prior Anime Test", role: .destructive) { confirmCleanup = true }
-                .buttonStyle(.bordered).font(.caption.bold()).disabled(model.busy)
+                .buttonStyle(.bordered).font(.caption.bold()).disabled(true)
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -177,7 +184,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Standalone, device-untested. The existing Anime copy/journal BLOCK Test Install. Separate confirmed removal handles ONLY the exact prior owned test, preserving a backup. Copy Log after that step; no automatic reinstall. No refresh/respring or promised gallery fix.")
+            Text("READ-ONLY diagnostic, device-untested. Check Prior Anime reads the exact historical path and reports syscall errors. No deletion, installation, journal clearing, preferences/index edits or refresh. Copy Log and stop. Access acquisition still temporarily swaps and restores this app’s own group Caches.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
