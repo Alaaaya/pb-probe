@@ -157,8 +157,9 @@ enum ProbeInstallTest {
             guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
                 throw PosterBoardStore.failure("Redirected owned tree.")
             }
-            guard url.path.hasPrefix(prefix) else { throw PosterBoardStore.failure("Owned entry escaped canonical root.") }
-            paths.insert(String(url.path.dropFirst(prefix.count)))
+            let entryPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard entryPath.hasPrefix(prefix) else { throw PosterBoardStore.failure("Owned entry escaped canonical root. root=\(prefix) entry=\(entryPath) raw=\(url.path)") }
+            paths.insert(String(entryPath.dropFirst(prefix.count)))
         }
         if let error { throw error }
         return paths

@@ -258,8 +258,9 @@ enum PosterBoardStore {
             let info = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard info.isSymbolicLink != true else { throw failure("Symbolic links are not allowed in wallpaper descriptors.") }
             if info.isRegularFile == true {
-                guard url.path.hasPrefix(prefix) else { throw failure("Descriptor entry escaped canonical root.") }
-                let relative = String(url.path.dropFirst(prefix.count))
+                let entryPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+                guard entryPath.hasPrefix(prefix) else { throw failure("Descriptor entry escaped canonical root. root=\(prefix) entry=\(entryPath) raw=\(url.path)") }
+                let relative = String(entryPath.dropFirst(prefix.count))
                 result[relative] = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
             }
         }
