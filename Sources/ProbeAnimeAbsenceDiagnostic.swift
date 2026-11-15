@@ -4,7 +4,7 @@ import Darwin
 /// Read-only observation of the exact historical descriptor. Never reconciles
 /// its pending marker, calls removal, or treats permission errors as absence.
 enum ProbeAnimeAbsenceDiagnostic {
-    static func run(path: String, log output: @escaping (String) -> Void, requireAbsence: Bool = false) throws -> String {
+    static func run(path: String, log output: @escaping (String) -> Void, requireAbsence: Bool = false, scope: ProbeAnimeJournalReconcile.Scope? = nil) throws -> String {
         var transcript = ""
         let log: (String) -> Void = { line in transcript += line + "\n"; output(line) }
         let canonical = try PosterBoardStore.canonicalContainer(path)
@@ -12,8 +12,11 @@ enum ProbeAnimeAbsenceDiagnostic {
             throw PosterBoardStore.failure("Absence diagnostic requires strict PosterBoard identity.")
         }
         let owner = ProbeOwnedAnimeCleanup.self
+        let journalID = scope?.journalID ?? owner.journalID
+        let descriptor = scope?.descriptor ?? owner.descriptor
+        let relative = scope?.relative ?? owner.relative
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let journal = documents.appendingPathComponent("InstallTests").appendingPathComponent(owner.journalID)
+        let journal = documents.appendingPathComponent("InstallTests").appendingPathComponent(journalID)
         for url in [documents, journal.deletingLastPathComponent(), journal] {
             let info = try FileManager.default.attributesOfItem(atPath: url.path)
             guard info[.type] as? FileAttributeType == .typeDirectory else {
@@ -22,7 +25,9 @@ enum ProbeAnimeAbsenceDiagnostic {
         }
         let pending = journal.appendingPathComponent("pending.json")
         let record = try owner.localRead(pending, limit: 65_536)
-        try owner.validateRecord(record, path: path)
+        if scope != nil {
+            _ = try ProbeAnimeJournalReconcile.Scope(journalID: journalID, record: record, path: path)
+        } else { try owner.validateRecord(record, path: path) }
         log("AUDIT ABSENCE · read-only; exact journal validated and preserved; no new backup/removal evidence is created.")
         let lease = try PosterBoardLease(path: path, log: log)
         do {
@@ -31,7 +36,7 @@ enum ProbeAnimeAbsenceDiagnostic {
             // scope or scan other stores/descriptors. No writes to PosterBoard.
             var paths = Set<String>()
             for file in ApprovedAnimeManifest.files.keys {
-                let parts = (owner.relative + "/" + file).split(separator: "/").map(String.init)
+                let parts = (relative + "/" + file).split(separator: "/").map(String.init)
                 for count in 1...parts.count { paths.insert(parts.prefix(count).joined(separator: "/")) }
             }
             for part in paths.sorted(by: { $0.count < $1.count }) {
@@ -43,7 +48,7 @@ enum ProbeAnimeAbsenceDiagnostic {
             guard lease.permits(parent) else {
                 throw PosterBoardStore.failure("Absence diagnostic parent ancestry invalid; absence UNKNOWN.")
             }
-            let classification = observe(parent: parent, name: owner.descriptor, log: log)
+            let classification = observe(parent: parent, name: descriptor, log: log)
             if requireAbsence {
                 guard classification == "ENOENT_OBSERVED_EXACT_PATH",
                       try ProbeDiagnostics.identifiesPosterBoard(path, log: log),
@@ -51,7 +56,7 @@ enum ProbeAnimeAbsenceDiagnostic {
                     throw PosterBoardStore.failure("Exact historical absence not validated; pending preserved.")
                 }
                 try PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease, rule: .strict)
-                guard observe(parent: parent, name: owner.descriptor, log: log) == "ENOENT_OBSERVED_EXACT_PATH" else {
+                guard observe(parent: parent, name: descriptor, log: log) == "ENOENT_OBSERVED_EXACT_PATH" else {
                     throw PosterBoardStore.failure("Final absence recheck failed; pending preserved.")
                 }
             }

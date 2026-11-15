@@ -5,9 +5,9 @@ s = Path("Sources/ProbeImportParity.swift").read_text()
 a = Path("Sources/TendiesArchive.swift").read_text()
 run = Path("Sources/ProbeInstallTest.swift").read_text()
 ui = Path("Sources/PBProbeApp.swift").read_text()
-assert 'guard !apply && !cleanup && !reconcile else' in ui
+assert 'guard !apply && !cleanup else' in ui
 assert 'guard !busy && false' not in ui
-assert 'Button("Test Install") { confirmInstall = true }\n                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)' in ui
+assert 'Button("Test Install") { confirmInstall = true }\n                    .buttonStyle(.bordered).tint(acid).disabled(model.busy || !model.reconciled)' in ui
 assert 'Button("Test Install") { model.run(apply: false, install: true) }' in ui
 assert 'retained[.modificationDate]' not in s
 assert 'retained[.posixPermissions]' in s

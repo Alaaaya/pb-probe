@@ -12,10 +12,12 @@ assert source.index('requireAbsence: true') < source.index('try local.archiveMar
 assert diagnostic.index('try lease.close()') < diagnostic.index('return transcript')
 assert 'try local.validate()' in source
 assert 'UInt32(RENAME_EXCL)' in source
-assert 'guard !apply && !cleanup && !reconcile else' in app
+assert 'guard !apply && !cleanup else' in app
 assert app.index('try ProbeAnimeJournalReconcile.run') < app.index('reconciled = true')
 assert 'Button("Reconcile Journal")' in app
-assert '.disabled(true)' in app
+assert '.disabled(model.busy || !model.reconciled)' in app
+assert 'guard !install || reconciled else' in app
+assert 'if reconcile || install { reconciled = false }' in app
 assert 'else if install {' in app
 # Both the unmodified original cleanup helpers and new local transaction compile.
 fixture = parts["stub"] + Path("Sources/ApprovedAnimeManifest.swift").read_text() + parts["s"] + diagnostic + source
@@ -35,6 +37,49 @@ func setup(_ name: String) throws -> (URL, URL) {
     try Data("original preserved".utf8).write(to: journal.appendingPathComponent("original.tendies"))
     return (docs, journal)
 }
+
+// Generalized actual-source journal selection and scope validation.
+let selection = base.appendingPathComponent("selection")
+let journalID = "A222B888-1111-4111-8111-111111111111"
+let descriptor = "43E29B4A-89D5-4918-A641-EC162016FC8B"
+let selectedJournal = selection.appendingPathComponent("InstallTests").appendingPathComponent(journalID)
+try fm.createDirectory(at: selectedJournal, withIntermediateDirectories: true)
+let changed = ["com.apple.posterkit.provider.descriptor.identifier",
+    "versions/1/contents/com.apple.posterkit.provider.contents.userInfo",
+    "versions/1/contents/7400.WWDC_2022-390w-844h@3x~iphone.wallpaper/Wallpaper.plist"]
+var normalized = ApprovedAnimeManifest.files
+for name in changed { normalized[name] = String(repeating: "a", count: 64) }
+var record: [String: Any] = ["container": "/private/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111",
+    "relative": ProbeOwnedAnimeCleanup.parentRelative + "/" + descriptor,
+    "archiveSHA256": ProbeInstallTest.approvedSHA256, "sourceIdentifier": "7400", "normalizedIdentifier": 60527,
+    "normalizedFiles": changed, "originalManifest": ApprovedAnimeManifest.files, "expected": normalized,
+    "existingFilesModified": false, "preferencesModified": false, "registrationIPC": false, "galleryVerified": false]
+let container = record["container"] as! String
+let recordBytes = try JSONSerialization.data(withJSONObject: record)
+try recordBytes.write(to: selectedJournal.appendingPathComponent("pending.json"))
+let selectedID = try ProbeAnimeJournalReconcile.pendingJournal(documents: selection)
+precondition(selectedID == journalID)
+let scope = try ProbeAnimeJournalReconcile.Scope(journalID: journalID, record: recordBytes, path: container)
+precondition(scope.descriptor == descriptor)
+let selectedLocal = try ProbeAnimeJournalReconcile.LocalJournal(documents: selection, journalID: selectedID)
+precondition(selectedLocal.record == recordBytes)
+record["relative"] = ProbeOwnedAnimeCleanup.parentRelative + "/../other"
+refuse("escaped descriptor scope") { _ = try ProbeAnimeJournalReconcile.Scope(journalID: journalID,
+    record: JSONSerialization.data(withJSONObject: record), path: container) }
+record["relative"] = ProbeOwnedAnimeCleanup.parentRelative + "/" + descriptor
+record["originalManifest"] = ["wrong": "manifest"]
+refuse("foreign manifest") { _ = try ProbeAnimeJournalReconcile.Scope(journalID: journalID,
+    record: JSONSerialization.data(withJSONObject: record), path: container) }
+let secondJournal = selectedJournal.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+try fm.createDirectory(at: secondJournal, withIntermediateDirectories: false)
+try recordBytes.write(to: secondJournal.appendingPathComponent("pending.json"))
+refuse("multiple pending journals") { _ = try ProbeAnimeJournalReconcile.pendingJournal(documents: selection) }
+let presence = base.appendingPathComponent("present-descriptor")
+try fm.createDirectory(at: presence.appendingPathComponent(descriptor), withIntermediateDirectories: true)
+precondition(ProbeAnimeAbsenceDiagnostic.observe(parent: presence, name: descriptor, log: { _ in }) == "PRESENT_MATCHING_DIRECTORY")
+precondition(fm.fileExists(atPath: selectedJournal.appendingPathComponent("pending.json").path))
+print("GENERALIZED JOURNAL SCOPE FIXTURES PASS recorded-uuid/normalized-manifest/selection/foreign-refusal/multiple-refusal/present-keeps-pending")
+
 let (docs, journal) = try setup("success")
 let local = try ProbeAnimeJournalReconcile.LocalJournal(documents: docs)
 let evidence = try local.prepareEvidence(path: "fixture-only")

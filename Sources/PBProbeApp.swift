@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · MTIME PARITY v23 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · RECONCILE + INSTALL v24 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -23,11 +23,16 @@ final class ProbeModel: ObservableObject {
         }
     }
     func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false, reconcile: Bool = false, compare: Bool = false) {
-        guard !apply && !cleanup && !reconcile else {
-            append("RESULT BLOCKED · access/removal/reconciliation disabled; only the confirmed approved install is enabled.")
+        guard !apply && !cleanup else {
+            append("RESULT BLOCKED · access/removal disabled; approved reconciliation and confirmed install only.")
             return
         }
         guard !busy else { return }
+        guard !install || reconciled else {
+            append("RESULT BLOCKED · reconcile the prior journal successfully in this session first.")
+            return
+        }
+        if reconcile || install { reconciled = false }
         busy = true
         let entered = container
         let selectedArchive = archive
@@ -83,7 +88,7 @@ final class ProbeModel: ObservableObject {
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
                 if reconcile {
                     reconciled = true
-                    append("RESULT JOURNAL RECONCILE PASS · only own-app historical pending marker archived. No wallpaper installed or deleted. Copy Log and stop before a separate parity test.")
+                    append("RESULT JOURNAL RECONCILE PASS · only own-app historical pending marker archived. No wallpaper installed or deleted. Test Install is available in this session with its separate confirmation; it has not run.")
                 }
                 container = path.0
                 // Terminal result is emitted on the UI actor, outside log backpressure.
@@ -173,7 +178,7 @@ struct ProbeView: View {
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY · approved install only; removal/reconciliation DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · approved install only; removal DISABLED; reconcile absent prior journal first").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
@@ -184,12 +189,12 @@ struct ProbeView: View {
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
-                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)
+                    .buttonStyle(.bordered).tint(acid).disabled(model.busy || !model.reconciled)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
             Button("Compare With Placard") { model.run(apply: false, compare: true) }
                 .buttonStyle(.borderedProminent).tint(acid).font(.caption.bold()).disabled(model.busy)
             Button("Reconcile Prior Anime Journal") { confirmReconcile = true }
-                .buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(true)
+                .buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -199,7 +204,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. Approved import and Test Install enabled with one confirmation. Rewritten identity files keep fresh timestamps; other safety checks unchanged. Copy Log after one test.")
+            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. Reconcile the exact absent prior journal first, then Test Install in this session with one install confirmation. Rewritten identity files keep fresh timestamps; other safety checks unchanged. Copy Log after one test.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -232,7 +237,7 @@ struct ProbeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Reconcile Journal") { model.run(apply: false, reconcile: true) }
         } message: {
-            Text("Rechecks that the exact prior Anime BE2EE206 is absent in store 61. If present, denied, redirected or uncertain, stops and keeps pending. Only this app's B6DDAE7B pending marker is archived, with original journal, archive and absence proof retained. No wallpaper files are deleted or written. No indexes, preferences, reset or refresh. Installation does NOT run automatically. After success, Copy Log and stop. Continue?")
+            Text("Rechecks that the exact descriptor recorded by the single own pending Anime journal is absent in store 61. If present, denied, redirected or uncertain, stops and keeps pending. Only this app's validated pending marker is archived, with original journal, archive and absence proof retained. No wallpaper files are deleted or written. No indexes, preferences, reset or refresh. Installation does NOT run automatically. After success, Test Install is unlocked in this session and requires its own confirmation. Continue?")
         }
         .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}
