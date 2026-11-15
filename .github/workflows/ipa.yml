@@ -47,6 +47,10 @@ jobs:
         run: |
           python3 Tests/gallery-audit.py
           swift /tmp/pb-gallery-fixtures.swift
+      - name: Verify read-only Placard comparison
+        run: |
+          python3 Tests/placard-comparison.py
+          swift /tmp/pb-placard-comparison-fixtures.swift
       - name: Generate project
         run: |
           brew install xcodegen

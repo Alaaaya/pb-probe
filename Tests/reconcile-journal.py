@@ -12,10 +12,10 @@ assert source.index('requireAbsence: true') < source.index('try local.archiveMar
 assert diagnostic.index('try lease.close()') < diagnostic.index('return transcript')
 assert 'try local.validate()' in source
 assert 'UInt32(RENAME_EXCL)' in source
-assert 'guard !apply && !cleanup && (!install || reconciled) else' in app
+assert 'guard !apply && !cleanup && !install && !reconcile else' in app
 assert app.index('try ProbeAnimeJournalReconcile.run') < app.index('reconciled = true')
 assert 'Button("Reconcile Journal")' in app
-assert '.disabled(model.busy || !model.reconciled)' in app
+assert '.disabled(true)' in app
 assert 'else if install {' in app
 # Both the unmodified original cleanup helpers and new local transaction compile.
 fixture = parts["stub"] + Path("Sources/ApprovedAnimeManifest.swift").read_text() + parts["s"] + diagnostic + source

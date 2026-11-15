@@ -85,3 +85,10 @@ repeat reconciliation blindly if pending has already been archived.
 Absence is a conservative point-in-time observation, not a guarantee against a
 future external writer. Existing install duplicate and pending-journal guards
 remain. Neither build success nor copy success proves device/gallery behavior.
+
+
+## Read-only Placard comparison diagnostic v14
+
+Compare With Placard reads only datastore 61 using the unchanged exact-path lease/grant implementation. It enumerates descriptor siblings and bounded store descendants, labels Anime candidates by matching immutable asset content or title (not asserted installer provenance), prints recursive metadata, SHA256, xattr names, protection class and full decoded plists/JSON, and reports references to candidate/Probe UUIDs and a DIFF. No xattr values are read. Binary plist data is represented as XML base64, preserving all values. All import/install/removal/reconciliation actions are model-blocked in this build. Existing native access temporarily swaps/restores only this app's group Caches as before; the diagnostic performs no PosterBoard/index/preference writes or refresh.
+
+Bounds are 8192 entries, depth 20, 8MiB per file and 96MiB total payload reads. Denials, unread entries and limits are explicit and cannot establish absence. Session display is limited to 4MB with an explicit incomplete marker if exceeded. The report is returned directly to the UI after lease close, bypassing checkpoint backpressure. This is a non-atomic observation, not proof of gallery acceptance. Candidate provenance and on-device behavior remain unverified until device evidence. Update in place with the same certificate, press Compare With Placard once, wait, Copy Log and stop. No import, installation, cleanup or refresh.

@@ -3,8 +3,8 @@ s = Path('Sources/ProbeAnimeAbsenceDiagnostic.swift').read_text()
 for forbidden in ['.write(', 'createDirectory', 'copyItem', 'removeItem', 'unlink(', 'unlinkat(', 'mkdir(', 'O_CREAT', 'O_WRONLY', 'moveItem', 'Tree(', 'removeVerified(', 'writeEvidence(']:
     assert forbidden not in s, forbidden
 app = Path('Sources/PBProbeApp.swift').read_text()
-assert 'guard !apply && !cleanup && (!install || reconciled) else' in app
-assert app.index('guard !apply && !cleanup && (!install || reconciled) else') < app.index('guard !busy')
+assert 'guard !apply && !cleanup && !install && !reconcile else' in app
+assert app.index('guard !apply && !cleanup && !install && !reconcile else') < app.index('guard !busy')
 assert 'Button("Check Prior Anime")' in app
 assert '}.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)' in app
 assert 'ProbeAnimeAbsenceDiagnostic.run' in app

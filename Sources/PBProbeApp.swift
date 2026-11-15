@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · EXACT ANIME JOURNAL RECONCILE v13 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · READ-ONLY PLACARD COMPARISON v14 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -18,13 +18,13 @@ final class ProbeModel: ObservableObject {
     
     func append(_ text: String) {
         log += text + (text.hasSuffix("\n") ? "" : "\n")
-        if log.utf8.count > 256_000 {
-            log = "LOG DISPLAY bounded to newest 160k characters\n" + String(log.suffix(160_000))
+        if log.utf8.count > 4_000_000 {
+            log = "LOG INCOMPLETE · bounded to newest 3M characters; missing sections must not be treated as absent\n" + String(log.suffix(3_000_000))
         }
     }
-    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false, reconcile: Bool = false) {
-        guard !apply && !cleanup && (!install || reconciled) else {
-            append("RESULT BLOCKED · access/removal disabled; Test Install requires successful exact journal reconciliation in this session.")
+    func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false, reconcile: Bool = false, compare: Bool = false) {
+        guard !apply && !cleanup && !install && !reconcile else {
+            append("RESULT BLOCKED · this comparison build disables all write/install/removal/reconciliation actions.")
             return
         }
         guard !busy else { return }
@@ -32,6 +32,7 @@ final class ProbeModel: ObservableObject {
         let entered = container
         let selectedArchive = archive
         append("\n\(reconcile ? "EXACT JOURNAL RECONCILIATION" : (absence ? "READ-ONLY ANIME ABSENCE" : "SESSION"))\n\(cleanup ? "OWNED ANIME CLEANUP" : (install ? "INSTALL TEST" : (apply ? "ACCESS TEST" : "DIAGNOSE"))) · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        if compare { log = "PB Probe · READ-ONLY PLACARD COMPARISON v14\n" }
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -54,7 +55,10 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    if reconcile {
+                    var comparisonReport: String?
+                    if compare {
+                        comparisonReport = try ProbePlacardComparison.run(path: path, log: logger)
+                    } else if reconcile {
                         try ProbeAnimeJournalReconcile.run(path: path, log: logger)
                     } else if absence {
                         _ = try ProbeAnimeAbsenceDiagnostic.run(path: path, log: logger)
@@ -70,20 +74,21 @@ final class ProbeModel: ObservableObject {
                     } else {
                         logger("DIAGNOSE COMPLETE · PosterBoard metadata identity verified; no root inspection or writes.")
                     }
-                    return path
+                    return (path, comparisonReport)
 
                 }.value
                 logBuffer.flush()
+                if let report = path.1 { append(report) }
                 if absence { append("RESULT ABSENCE DIAGNOSTIC COMPLETE · read the AUDIT ABSENCE observations, not proof of cleanup. Journal unchanged; no removal/install/refresh performed. Copy Log and stop.") }
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
                 if reconcile {
                     reconciled = true
                     append("RESULT JOURNAL RECONCILE PASS · only own-app historical pending marker archived. No wallpaper installed or deleted. Copy Log and stop before a separate parity test.")
                 }
-                container = path
+                container = path.0
                 // Terminal result is emitted on the UI actor, outside log backpressure.
                 if cleanup { append("RESULT OWNED CLEANUP PASS · exact prior Anime test descriptor removed and matching pending marker archived; all evidence retained. No other wallpaper/index/preferences changed. No reinstall or refresh performed.") }
-                if !audit && !cleanup && !absence && !reconcile { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
+                if !audit && !cleanup && !absence && !reconcile && !compare { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
                     : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")) }
             } catch {
@@ -94,7 +99,7 @@ final class ProbeModel: ObservableObject {
         }
     }
     func importFile(_ url: URL) {
-        guard !busy else { return }
+        guard !busy && false else { return }
         append("PICKER URL received · name=\(url.lastPathComponent) extension=\(url.pathExtension) isFileURL=\(url.isFileURL)")
         guard url.pathExtension.lowercased() == "tendies" else {
             importError = "Selected \(url.lastPathComponent). Choose a .tendies wallpaper file."
@@ -163,26 +168,28 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("EXACT OWN JOURNAL / EXPLICIT RECONCILIATION").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("PLACARD vs PROBE / READ ONLY").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY · removal DISABLED · install gated by reconciliation").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · all install/removal/reconciliation DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
                     picker = true
-                }.disabled(model.busy || !model.reconciled)
+                }.disabled(true)
                 Button("Diagnose") { model.run(apply: false) }
                 Button("Check Prior Anime") { model.run(apply: false, absence: true) }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
-                    .buttonStyle(.bordered).tint(acid).disabled(model.busy || !model.reconciled)
+                    .buttonStyle(.bordered).tint(acid).disabled(true)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
+            Button("Compare With Placard") { model.run(apply: false, compare: true) }
+                .buttonStyle(.borderedProminent).tint(acid).font(.caption.bold()).disabled(model.busy)
             Button("Reconcile Prior Anime Journal") { confirmReconcile = true }
-                .buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy || model.reconciled)
+                .buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(true)
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -192,7 +199,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Device-untested. Reconcile archives ONLY the exact old own-app pending marker after fresh absence checks and lease close, keeping all evidence. No PosterBoard deletion/writes in reconciliation. Copy Log and stop first. Import and Test Install unlock only after success in this session and require separate confirmation. Check Prior Anime stays read-only. No preferences/index edits or refresh.")
+            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. All writes and imports disabled. Press Compare once, wait, then Copy Log and stop.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
