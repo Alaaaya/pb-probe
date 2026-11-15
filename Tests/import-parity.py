@@ -4,6 +4,13 @@ import shutil, zipfile, plistlib
 s = Path("Sources/ProbeImportParity.swift").read_text()
 a = Path("Sources/TendiesArchive.swift").read_text()
 run = Path("Sources/ProbeInstallTest.swift").read_text()
+ui = Path("Sources/PBProbeApp.swift").read_text()
+assert 'guard !apply && !cleanup && !reconcile else' in ui
+assert 'guard !busy && false' not in ui
+assert 'Button("Test Install") { confirmInstall = true }\n                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)' in ui
+assert 'Button("Test Install") { model.run(apply: false, install: true) }' in ui
+assert 'retained[.modificationDate]' not in s
+assert 'retained[.posixPermissions]' in s
 assert "ProbeImportParity.normalize" in run
 assert 'sourceIdentifier == "7400"' in run
 assert 'pending.json' in run
@@ -95,8 +102,16 @@ for url in [source, source.appendingPathComponent(rawPath), source.appendingPath
     let c = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
     precondition(c.year == 2022 && c.month == 6 && c.day == 7 && c.hour == 8 && c.minute == 10 && c.second == 12)
 }
+let normalizationStarted = Date()
 let changed = try ProbeImportParity.normalize(source: source, packageRoot: extracted, identifier: 53129)
 precondition(changed == Set([rawPath, userPath, wallpaperPath]))
+for path in changed {
+    let attrs = try fm.attributesOfItem(atPath: source.appendingPathComponent(path).path)
+    precondition((attrs[.posixPermissions] as! NSNumber).intValue == 0o600)
+    precondition((attrs[.modificationDate] as! Date) >= normalizationStarted.addingTimeInterval(-1))
+}
+let unchangedDate = try fm.attributesOfItem(atPath: source.appendingPathComponent("versions/1/contents/7400.wallpaper/7400.caml").path)[.modificationDate] as! Date
+precondition(calendar.component(.year, from: unchangedDate) == 2022)
 let after = try PosterBoardStore.manifest(source)
 precondition(Set(before.keys) == Set(after.keys))
 for key in before.keys where !changed.contains(key) { precondition(before[key] == after[key]) }
@@ -157,6 +172,6 @@ precondition(ProbeImportParity.isDuplicate(identifier: "different", directory: "
  originalIdentifier: "7400", normalizedIdentifier: "53129", sourceDirectory: source.lastPathComponent))
 precondition(!ProbeImportParity.isDuplicate(identifier: "other", directory: UUID().uuidString,
  originalIdentifier: "7400", normalizedIdentifier: "53129", sourceDirectory: source.lastPathComponent))
-print("IMPORT PARITY FIXTURES PASS · extraction attributes, limits, three fields, nested preservation, conditional Container and prior-copy refusal")
+print("IMPORT PARITY FIXTURES PASS · extraction attributes, fresh rewrite mtimes, limits, three fields, nested preservation, conditional Container and prior-copy refusal")
 ''')
 print("IMPORT PARITY actual-source fixtures generated")

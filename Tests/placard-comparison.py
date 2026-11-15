@@ -9,7 +9,7 @@ assert "var grants = 128" in s and "var seconds: Double = 30" in s and "8_388_60
 assert "openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK" in s
 assert "AT_SYMLINK_NOFOLLOW" in s and "flistxattr" in s
 assert 'Button("Compare With Placard")' in app
-assert "guard !apply && !cleanup && !install && !reconcile else" in app
+assert "guard !apply && !cleanup && !reconcile else" in app
 assert 'if let report = path.1 { append(report) }' in app
 stub = r'''
 import Foundation

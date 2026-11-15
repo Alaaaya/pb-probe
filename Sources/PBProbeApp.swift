@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · READ-ONLY PLACARD COMPARISON v14 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · MTIME PARITY v23 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -23,8 +23,8 @@ final class ProbeModel: ObservableObject {
         }
     }
     func run(apply: Bool, install: Bool = false, audit: Bool = false, cleanup: Bool = false, absence: Bool = false, reconcile: Bool = false, compare: Bool = false) {
-        guard !apply && !cleanup && !install && !reconcile else {
-            append("RESULT BLOCKED · this comparison build disables all write/install/removal/reconciliation actions.")
+        guard !apply && !cleanup && !reconcile else {
+            append("RESULT BLOCKED · access/removal/reconciliation disabled; only the confirmed approved install is enabled.")
             return
         }
         guard !busy else { return }
@@ -99,7 +99,7 @@ final class ProbeModel: ObservableObject {
         }
     }
     func importFile(_ url: URL) {
-        guard !busy && false else { return }
+        guard !busy else { return }
         append("PICKER URL received · name=\(url.lastPathComponent) extension=\(url.pathExtension) isFileURL=\(url.isFileURL)")
         guard url.pathExtension.lowercased() == "tendies" else {
             importError = "Selected \(url.lastPathComponent). Choose a .tendies wallpaper file."
@@ -168,23 +168,23 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("PLACARD vs PROBE / READ ONLY").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("PLACARD MTIME PARITY / APPROVED TEST").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Text("STRICT IDENTITY · all install/removal/reconciliation DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("STRICT IDENTITY · approved install only; removal/reconciliation DISABLED").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
                     picker = true
-                }.disabled(true)
+                }.disabled(model.busy)
                 Button("Diagnose") { model.run(apply: false) }
                 Button("Check Prior Anime") { model.run(apply: false, absence: true) }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
-                    .buttonStyle(.bordered).tint(acid).disabled(true)
+                    .buttonStyle(.bordered).tint(acid).disabled(model.busy)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
             Button("Compare With Placard") { model.run(apply: false, compare: true) }
                 .buttonStyle(.borderedProminent).tint(acid).font(.caption.bold()).disabled(model.busy)
@@ -199,7 +199,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. All writes and imports disabled. Press Compare once, wait, then Copy Log and stop.")
+            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. Approved import and Test Install enabled with one confirmation. Rewritten identity files keep fresh timestamps; other safety checks unchanged. Copy Log after one test.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -226,7 +226,7 @@ struct ProbeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Test Install") { model.run(apply: false, install: true) }
         } message: {
-            Text("Copies one approved Anime-Squad descriptor with archived file attributes, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
+            Text("Copies one approved Anime-Squad descriptor with archived file attributes except fresh timestamps on the three rewritten identity files, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
         }
         .alert("Archive ONLY the old test journal marker?", isPresented: $confirmReconcile) {
             Button("Cancel", role: .cancel) {}

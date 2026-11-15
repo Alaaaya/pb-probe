@@ -12,7 +12,7 @@ assert source.index('requireAbsence: true') < source.index('try local.archiveMar
 assert diagnostic.index('try lease.close()') < diagnostic.index('return transcript')
 assert 'try local.validate()' in source
 assert 'UInt32(RENAME_EXCL)' in source
-assert 'guard !apply && !cleanup && !install && !reconcile else' in app
+assert 'guard !apply && !cleanup && !reconcile else' in app
 assert app.index('try ProbeAnimeJournalReconcile.run') < app.index('reconciled = true')
 assert 'Button("Reconcile Journal")' in app
 assert '.disabled(true)' in app

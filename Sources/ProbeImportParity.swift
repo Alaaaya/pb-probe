@@ -54,10 +54,9 @@ enum ProbeImportParity {
             let url = source.appendingPathComponent(relative)
             let attributes = try fm.attributesOfItem(atPath: url.path)
             try bytes.write(to: url, options: .atomic)
-            // Keep extraction attributes after the atomic local rewrite.
+            // Keep the extracted mode, but leave the atomic rewrite timestamp fresh.
             var retained: [FileAttributeKey: Any] = [:]
             retained[.posixPermissions] = attributes[.posixPermissions]
-            retained[.modificationDate] = attributes[.modificationDate]
             try fm.setAttributes(retained, ofItemAtPath: url.path)
         }
         let after = try PosterBoardStore.manifest(source)

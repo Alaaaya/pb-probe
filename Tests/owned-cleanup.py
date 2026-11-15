@@ -2,7 +2,7 @@
 from pathlib import Path
 s = Path("Sources/ProbeOwnedAnimeCleanup.swift").read_text()
 ui = Path("Sources/PBProbeApp.swift").read_text()
-assert 'guard !apply && !cleanup && !install && !reconcile else' in ui  # removal remains model-blocked
+assert 'guard !apply && !cleanup && !reconcile else' in ui  # removal remains model-blocked
 assert 'try ProbeOwnedAnimeCleanup.run(path: path, log: logger)' in ui
 assert 'B6DDAE7B-791A-4618-A85E-D9AC55BDF09E' in s
 assert 'BE2EE206-9948-4F2B-BD3E-C02042EDBC5D' in s
