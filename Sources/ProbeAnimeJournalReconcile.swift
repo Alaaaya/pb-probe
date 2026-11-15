@@ -54,7 +54,7 @@ enum ProbeAnimeJournalReconcile {
         init(documents: URL) throws {
             let root = documents.appendingPathComponent("InstallTests")
             let journal = root.appendingPathComponent(ProbeOwnedAnimeCleanup.journalID)
-            var opened = [(URL, Int32, stat)]()
+            var opened: [(URL, Int32, stat)] = []
             var file: Int32 = -1
             do {
                 for location in [documents, root, journal] {
