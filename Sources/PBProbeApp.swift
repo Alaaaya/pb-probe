@@ -9,7 +9,40 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · RECONCILE + INSTALL v24 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · COPY + CONFIRMED RESPRING v26 · standalone diagnostic\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var refreshGate = ProbeRefreshGate()
+    @Published var showRefreshConfirmation = false
+    @Published var showRespring = false
+
+    init() {
+        if let previous = ProbeRefreshEvidence.previous() {
+            log += "PREVIOUS REFRESH EVIDENCE (not proof of system respring)\n" + previous + "\n"
+        }
+    }
+    func refreshEvent(_ text: String) {
+        append(text)
+        do { try ProbeRefreshEvidence.record(text) }
+        catch { append("REFRESH EVIDENCE ERROR · " + error.localizedDescription) }
+    }
+    func decideRefresh(confirmed: Bool) {
+        guard busy == false, refreshGate.awaitingConfirmation else { return }
+        if !confirmed {
+            _ = refreshGate.decide(confirmed: false)
+            refreshEvent("REFRESH CANCELLED · copied descriptor retained; no payload executed")
+            return
+        }
+        do {
+            // Persist before mounting WebKit, because the process may disappear.
+            try ProbeRefreshEvidence.record("REFRESH BEFORE confirmed launch · copy PASS and lease closed; respring may interrupt app; no gallery success implied")
+        } catch {
+            _ = refreshGate.decide(confirmed: false)
+            append("REFRESH BLOCKED · cannot preserve BEFORE evidence · " + error.localizedDescription)
+            return
+        }
+        guard refreshGate.decide(confirmed: true) else { return }
+        append("REFRESH BEFORE confirmed launch · durable evidence saved; opening local WebKit payload")
+        showRespring = true
+    }
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -27,7 +60,7 @@ final class ProbeModel: ObservableObject {
             append("RESULT BLOCKED · access/removal disabled; approved reconciliation and confirmed install only.")
             return
         }
-        guard !busy else { return }
+        guard !busy, !refreshGate.awaitingConfirmation, !refreshGate.running else { return }
         guard !install || reconciled else {
             append("RESULT BLOCKED · reconcile the prior journal successfully in this session first.")
             return
@@ -90,6 +123,11 @@ final class ProbeModel: ObservableObject {
                     reconciled = true
                     append("RESULT JOURNAL RECONCILE PASS · only own-app historical pending marker archived. No wallpaper installed or deleted. Test Install is available in this session with its separate confirmation; it has not run.")
                 }
+                if install {
+                    refreshGate.copyFinished(success: true)
+                    refreshEvent("REFRESH COPY READY · successful readback and lease close; awaiting separate respring confirmation")
+                    showRefreshConfirmation = true
+                }
                 container = path.0
                 // Terminal result is emitted on the UI actor, outside log backpressure.
                 if cleanup { append("RESULT OWNED CLEANUP PASS · exact prior Anime test descriptor removed and matching pending marker archived; all evidence retained. No other wallpaper/index/preferences changed. No reinstall or refresh performed.") }
@@ -104,7 +142,7 @@ final class ProbeModel: ObservableObject {
         }
     }
     func importFile(_ url: URL) {
-        guard !busy else { return }
+        guard !busy, !refreshGate.awaitingConfirmation, !refreshGate.running else { return }
         append("PICKER URL received · name=\(url.lastPathComponent) extension=\(url.pathExtension) isFileURL=\(url.isFileURL)")
         guard url.pathExtension.lowercased() == "tendies" else {
             importError = "Selected \(url.lastPathComponent). Choose a .tendies wallpaper file."
@@ -173,7 +211,7 @@ struct ProbeView: View {
                 Spacer()
                 Text(model.busy ? "BUSY" : "READY").font(.caption.monospaced().bold()).foregroundStyle(acid)
             }
-            Text("PLACARD MTIME PARITY / APPROVED TEST").font(.caption2.monospaced()).foregroundStyle(.gray)
+            Text("COPY + CONFIRMED RESPRING / BUILD 26").font(.caption2.monospaced()).foregroundStyle(.gray)
             TextField("Container path (blank = discover)", text: $model.container)
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
@@ -190,7 +228,7 @@ struct ProbeView: View {
             if model.archive != nil {
                 Button("Test Install") { confirmInstall = true }
                     .buttonStyle(.bordered).tint(acid).disabled(model.busy || !model.reconciled)
-                Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
+                Text("COPY FIRST · separate respring confirmation after success").font(.caption2.monospaced()).foregroundStyle(acid) }
             Button("Compare With Placard") { model.run(apply: false, compare: true) }
                 .buttonStyle(.borderedProminent).tint(acid).font(.caption.bold()).disabled(model.busy)
             Button("Reconcile Prior Anime Journal") { confirmReconcile = true }
@@ -204,7 +242,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. Reconcile the exact absent prior journal first, then Test Install in this session with one install confirmation. Rewritten identity files keep fresh timestamps; other safety checks unchanged. Copy Log after one test.")
+            Text("Device-untested. Compare With Placard only reads store 61 through existing bounded grants. Lists siblings, compares Anime content candidates, prints full structured metadata and matching indexes. Provenance and gallery visibility remain unverified. Reconcile the exact absent prior journal first, then Test Install in this session with one install confirmation. After successful copy and lease close, confirm the separate disruptive respring attempt. App may close and unsaved work may be lost. This does not guarantee registration or picker visibility. Refresh evidence survives in Files / PB Probe / LastRefreshAttempt.txt. No payload restarts on launch.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -219,6 +257,22 @@ struct ProbeView: View {
                 DispatchQueue.main.async { model.append(text) }
             })
         }
+        .alert("Respring now after successful copy?", isPresented: $model.showRefreshConfirmation) {
+            Button("Skip respring", role: .cancel) { model.decideRefresh(confirmed: false) }
+            Button("Respring now", role: .destructive) { model.decideRefresh(confirmed: true) }
+        } message: {
+            Text("The descriptor copy and readback passed and access is closed. This runs the same local WebKit stress mechanism used by Placard to attempt a respring immediately after copy. The screen or apps may restart and unsaved work may be lost. It is NOT a registration API and does NOT guarantee the wallpaper appears. Skip leaves the copied descriptor unchanged. After returning, check Add Wallpaper and Copy Log. Do not copy again.")
+        }
+        .fullScreenCover(isPresented: $model.showRespring, onDismiss: {
+            model.refreshGate.stop()
+            model.refreshEvent("REFRESH AFTER cover dismissed · system respring and picker visibility require device confirmation")
+        }) {
+            ZStack(alignment: .topTrailing) {
+                ProbeRespringView(event: { model.refreshEvent($0) }).ignoresSafeArea()
+                Button("Stop / return to log") { model.showRespring = false }
+                    .padding().background(.black.opacity(0.8)).foregroundStyle(.white)
+            }.interactiveDismissDisabled()
+        }
         .alert("Import failed", isPresented: Binding(
             get: { model.importError != nil && !picker },
             set: { if !$0 { model.importError = nil } }
@@ -231,7 +285,7 @@ struct ProbeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Test Install") { model.run(apply: false, install: true) }
         } message: {
-            Text("Copies one approved Anime-Squad descriptor with archived file attributes except fresh timestamps on the three rewritten identity files, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
+            Text("Copies one approved Anime-Squad descriptor with archived file attributes except fresh timestamps on the three rewritten identity files, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call or reset. After successful copy and lease close, a SECOND confirmation offers a disruptive Placard-style WebKit respring attempt; it may close apps and lose unsaved work. Cancel skips that attempt without deleting the copy. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
         }
         .alert("Archive ONLY the old test journal marker?", isPresented: $confirmReconcile) {
             Button("Cancel", role: .cancel) {}

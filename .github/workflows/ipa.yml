@@ -51,6 +51,10 @@ jobs:
         run: |
           python3 Tests/placard-comparison.py
           swift /tmp/pb-placard-comparison-fixtures.swift
+      - name: Verify confirmed copy and respring gates
+        run: |
+          python3 Tests/copy-refresh.py
+          swift /tmp/pb-copy-refresh-fixtures.swift
       - name: Generate project
         run: |
           brew install xcodegen
