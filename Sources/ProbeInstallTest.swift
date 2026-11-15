@@ -3,7 +3,7 @@ import CryptoKit
 import Darwin
 
 /// One exact owner-provided archive; copy-only installation matching observed
-/// behavior. No registration IPC, preferences, reset, respring or payload edits.
+/// import semantics. No registration IPC, preferences, reset or respring.
 enum ProbeInstallTest {
     static let approvedSHA256 = "ddb823145d1d3fa20ff83dff10de37b6c8e6d454863aa6a81b2125139200b66a"
     static let provider = "com.apple.WallpaperKit.CollectionsPoster"
@@ -39,8 +39,8 @@ enum ProbeInstallTest {
             throw PosterBoardStore.failure("Expected exactly one CollectionsPoster UUID descriptor. Nothing written.")
         }
         let source = descriptors[0].url
-        let expected = try PosterBoardStore.manifest(source)
-        guard !expected.keys.contains(where: { $0.split(separator: "/").contains(".DS_Store") }) else {
+        let originalManifest = try PosterBoardStore.manifest(source)
+        guard !originalManifest.keys.contains(where: { $0.split(separator: "/").contains(".DS_Store") }) else {
             throw PosterBoardStore.failure("Finder debris was not filtered. Nothing written.")
         }
         let sourceIdentifier = try String(contentsOf: source.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier"), encoding: .utf8)
@@ -48,6 +48,10 @@ enum ProbeInstallTest {
         guard sourceIdentifier == "7400" else {
             throw PosterBoardStore.failure("Approved descriptor identity differs. Nothing written.")
         }
+        let normalizedIdentifier = Int.random(in: 10_000...99_999)
+        let changed = try ProbeImportParity.normalize(source: source, packageRoot: extracted, identifier: normalizedIdentifier)
+        let expected = try PosterBoardStore.manifest(source)
+        log("IMPORT PARITY · normalized exactly \(changed.count) identity files to integer \(normalizedIdentifier); nested identifiers, paths and suggestion metadata unchanged.")
         guard try ProbeDiagnostics.identifiesPosterBoard(path, log: log) else {
             throw PosterBoardStore.failure("Strict PosterBoard metadata required. Nothing written.")
         }
@@ -77,8 +81,9 @@ enum ProbeInstallTest {
                     throw PosterBoardStore.failure("Existing descriptor identity unreadable/oversized. Nothing written.")
                 }
                 let identifier = try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard identifier != sourceIdentifier,
-                      entry.caseInsensitiveCompare(source.lastPathComponent) != .orderedSame else {
+                guard !ProbeImportParity.isDuplicate(identifier: identifier, directory: entry,
+                    originalIdentifier: sourceIdentifier, normalizedIdentifier: String(normalizedIdentifier),
+                    sourceDirectory: source.lastPathComponent) else {
                     throw PosterBoardStore.failure("This wallpaper identity is already installed. Preserved it unchanged; no second registration attempted.")
                 }
             }
@@ -90,14 +95,15 @@ enum ProbeInstallTest {
                 throw PosterBoardStore.failure("Exact destination access or final identity check failed. Nothing written.")
             }
             let record: [String: Any] = ["container": path, "relative": relative,
-                "archiveSHA256": digest, "sourceIdentifier": sourceIdentifier,
+                "archiveSHA256": digest, "sourceIdentifier": sourceIdentifier, "normalizedIdentifier": normalizedIdentifier,
+                "normalizedFiles": changed.sorted(), "originalManifest": originalManifest,
                 "existingFilesModified": false, "preferencesModified": false,
                 "registrationIPC": false, "galleryVerified": false, "expected": expected]
             try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
                 .write(to: journal.appendingPathComponent("pending.json"), options: .atomic)
             log("INSTALL TEST BEFORE exclusive new descriptor; journal=\(journal.lastPathComponent) relative=\(relative)")
             try copyExclusive(source: source, target: target, expected: expected, log: log)
-            log("INSTALL TEST COPY PASS · \(expected.count) unchanged files verified by SHA-256. No preference or registration calls.")
+            log("INSTALL TEST COPY PASS · \(expected.count) prepared files verified by SHA-256; only three local identity fields normalized. No preference or registration calls.")
             try Data("COPY PASS; gallery visibility and activation UNVERIFIED".utf8)
                 .write(to: journal.appendingPathComponent("copy-pass.txt"), options: .atomic)
             try lease.close()
@@ -165,22 +171,48 @@ enum ProbeInstallTest {
         return paths
     }
 
-    /// Reserve the fresh root with exclusive mkdir; copy contents only after inode
-    /// ownership proof. On failure roll back only our still-owned, unchanged tree.
+    /// Compare permission/date metadata only, not ownership, ACL or protection.
+    static func verifyCopyAttributes(source: URL, target: URL) throws {
+        let fm = FileManager.default
+        let paths = try relativePaths(source).union([""])
+        for path in paths {
+            let a = try fm.attributesOfItem(atPath: source.appendingPathComponent(path).path)
+            let b = try fm.attributesOfItem(atPath: target.appendingPathComponent(path).path)
+            guard let am = a[.posixPermissions] as? NSNumber, let bm = b[.posixPermissions] as? NSNumber,
+                  am == bm, let ad = a[.modificationDate] as? Date, let bd = b[.modificationDate] as? Date,
+                  abs(ad.timeIntervalSince(bd)) <= 0.001 else {
+                throw PosterBoardStore.failure("Whole-root permissions/mtime readback mismatch at \(path).")
+            }
+        }
+    }
+
+    /// Copy the WHOLE root through Foundation, including root metadata. Never
+    /// replace an existing path. Failure during copy has uncertain ownership,
+    /// so leave any partial tree for journal review instead of deleting it.
     static func copyExclusive(source: URL, target: URL, expected: [String: String], log: (String) -> Void) throws {
         let fm = FileManager.default
-        guard mkdir(target.path, S_IRWXU) == 0 else {
-            throw PosterBoardStore.failure("Exclusive descriptor directory create failed errno=\(errno); existing paths preserved.")
+        _ = try PosterBoardStore.manifest(source) // reject symlinks before copying
+        var existing = stat()
+        guard lstat(target.path, &existing) != 0, errno == ENOENT else {
+            throw PosterBoardStore.failure("Descriptor destination exists or is uncertain; preserved unchanged.")
+        }
+        do { try fm.copyItem(at: source, to: target) }
+        catch {
+            log("CLEANUP ERROR · whole-root copy failed; any partial destination retained, no ownership assumed")
+            throw error
         }
         var owned = stat()
         guard lstat(target.path, &owned) == 0, (owned.st_mode & S_IFMT) == S_IFDIR else {
-            throw PosterBoardStore.failure("Cannot prove created directory ownership; retained for journal review.")
+            throw PosterBoardStore.failure("Cannot prove copied directory ownership; retained for journal review.")
         }
         do {
-            for name in try fm.contentsOfDirectory(atPath: source.path) {
-                try fm.copyItem(at: source.appendingPathComponent(name), to: target.appendingPathComponent(name))
-            }
+            try verifyCopyAttributes(source: source, target: target)
             let readback = try PosterBoardStore.manifest(target)
+            let sourcePaths = try relativePaths(source)
+            let targetPaths = try relativePaths(target)
+            guard sourcePaths == targetPaths else {
+                throw PosterBoardStore.failure("Whole-root path readback mismatch.")
+            }
             guard readback == expected else {
                 throw PosterBoardStore.failure("Descriptor readback mismatch. expected=\(expected) actual=\(readback)")
             }

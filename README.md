@@ -16,3 +16,39 @@ The new placard-style strategy independently reimplements the observed worse_que
 Use Import, then Diagnose and Copy Log. Apply is experimental, separately confirmed and may make the wallpaper picker unstable. Existing descriptors are never replaced. Recovery backups must not be deleted.
 
 Current v8 UI provides a separately confirmed one-shot Test Install for the exact approved Anime-Squad package. It does not invoke the legacy prefs-writing installer described above. No prefs, resets or registration IPC. Duplicate identity blocks installation. COPY PASS is not visible gallery/activation proof. Preserve InstallTests recovery material; a pending journal blocks repeated installs.
+
+## Standalone import parity experiment
+
+Branch `mirsa/standalone-import-parity` changes only normal archive/import
+semantics, independently implemented from observed behavior. Container discovery,
+lease/token acquisition and access mechanisms are unchanged.
+
+The approved Anime-Squad SHA-256 remains the only installable archive. Extraction
+uses pinned ZIPFoundation 0.9.20's public URL extractor for POSIX permissions and
+modification dates, after a bounded streaming size/CRC pass. Explicit directory
+attributes are applied last. Existing traversal, symlink, entry-count, expansion,
+duplicate-path and Finder-junk protections remain; extraction requires a fresh
+private empty directory. Hidden-file filtering intentionally remains stricter
+than the reference importer.
+
+For packages without an exact case-insensitive Container path component, one
+10000...99999 integer updates only raw descriptor identifier text, the top-level
+userInfo wallpaperRepresentingIdentifier, and the top-level Wallpaper.plist
+identifier. Plist formats, nested IDs, filenames and suggestion metadata remain
+unchanged. Atomic local rewrites retain restored mode/date.
+
+Foundation copies the entire descriptor root to a fresh UUID, refusing existing
+paths. Readback verifies hashes, paths, mode and mtime, not ownership/ACL/protection.
+A failed initial copy has uncertain ownership and is retained for review. Later
+rollback is allowed only with matching root inode/device and known contents.
+
+An old pending journal, original identifier 7400, matching normalized identifier,
+original descriptor UUID, or known prior test UUID blocks installation. Nothing
+clears journals, deletes old tests or overwrites existing wallpapers. Alaa's prior
+successful copy therefore remains a real blocker, not something this build
+silently works around. Do not remove it to force this test.
+
+No refresh/respring mechanism is included. No preferences, gallery-index writes,
+registration IPC, reset or activation calls are added. Copy success is not gallery
+acceptance proof. A prior normal reboot did not make the wallpaper visible.
+No Mirsa edits, release publication or device execution is authorized here.

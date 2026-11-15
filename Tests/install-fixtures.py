@@ -8,7 +8,7 @@ for banned in ['PBF_', 'PersistedPoster', 'resetProtections:', 'prepareDescripto
     assert banned not in s
 assert 'digest == approvedSHA256' in s
 assert 'descriptors.count == 1' in s
-assert 'identifier != sourceIdentifier' in s
+assert 'ProbeImportParity.isDuplicate' in s
 assert 'pending.json' in s
 a = Path("Sources/PBProbeApp.swift").read_text()
 assert 'Button("Test Install") { model.run(apply: false, install: true) }' in a
@@ -43,9 +43,12 @@ let aliasManifest = try PosterBoardStore.manifest(aliasSource)
 precondition(aliasManifest == expected)
 let aliasPaths = try ProbeInstallTest.relativePaths(aliasSource)
 precondition(aliasPaths == sourcePaths)
+try fm.setAttributes([.posixPermissions: 0o750, .modificationDate: Date(timeIntervalSince1970: 1700000000)], ofItemAtPath: source.path)
+try fm.setAttributes([.posixPermissions: 0o600, .modificationDate: Date(timeIntervalSince1970: 1700000000)], ofItemAtPath: source.appendingPathComponent("versions/1/payload").path)
 let target = root.appendingPathComponent("target")
 try ProbeInstallTest.copyExclusive(source: source, target: target, expected: expected, log: { _ in })
 precondition(try PosterBoardStore.manifest(target) == expected)
+try ProbeInstallTest.verifyCopyAttributes(source: source, target: target)
 do {
     try ProbeInstallTest.copyExclusive(source: source, target: target, expected: expected, log: { _ in })
     fatalError("collision accepted")

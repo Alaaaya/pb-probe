@@ -37,7 +37,13 @@ final class TendiesArchive {
         let archive = try Archive(url: url, accessMode: .read)
         try validateEntries(archive)
         let fm = FileManager.default
+        let rootInfo = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard rootInfo.isDirectory == true, rootInfo.isSymbolicLink != true,
+              try fm.contentsOfDirectory(atPath: root.path).isEmpty else {
+            throw PosterBoardStore.failure("Extraction requires a fresh empty private directory.")
+        }
         var actualTotal: UInt64 = 0
+        var directories: [(Entry, URL)] = []
         for entry in archive {
             let parts = entry.path.split(separator: "/")
             let hiddenJunk = parts.contains { part in
@@ -46,16 +52,17 @@ final class TendiesArchive {
             }
             if hiddenJunk { continue }
             let target = root.appendingPathComponent(entry.path)
+            guard target.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/") else {
+                throw PosterBoardStore.failure("Archive destination escaped its private root.")
+            }
             if entry.type == .directory {
                 try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                directories.append((entry, target))
                 continue
             }
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            guard fm.createFile(atPath: target.path, contents: nil) else {
-                throw PosterBoardStore.failure("Cannot create wallpaper file.")
-            }
-            let handle = try FileHandle(forWritingTo: target)
-            defer { try? handle.close() }
+            // First bounded streaming pass retains the existing runtime size/CRC
+            // protections. The public URL extractor then applies ZIP permissions
+            // and mtime using the pinned library, not private ZIP internals.
             var actualSize: UInt64 = 0
             let checksum = try archive.extract(entry) { chunk in
                 let next = UInt64(chunk.count)
@@ -66,10 +73,22 @@ final class TendiesArchive {
                 }
                 actualSize += next
                 actualTotal += next
-                try handle.write(contentsOf: chunk)
             }
             guard actualSize == UInt64(entry.uncompressedSize), checksum == entry.checksum else {
                 throw PosterBoardStore.failure("Wallpaper checksum mismatch.")
+            }
+            let writtenCRC = try archive.extract(entry, to: target)
+            let written = try target.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
+            guard writtenCRC == entry.checksum, written.isRegularFile == true,
+                  written.isSymbolicLink != true, written.fileSize == Int(actualSize) else {
+                throw PosterBoardStore.failure("Extracted wallpaper readback mismatch.")
+            }
+        }
+        // Defer explicit directory attributes until children exist, deepest first,
+        // so child creation cannot change archived directory dates.
+        for (entry, target) in directories.sorted(by: { $0.1.pathComponents.count > $1.1.pathComponents.count }) {
+            guard try archive.extract(entry, to: target) == entry.checksum else {
+                throw PosterBoardStore.failure("Directory checksum mismatch.")
             }
         }
     }

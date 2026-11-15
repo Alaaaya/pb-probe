@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · readonly-gallery v9 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · standalone-import-parity v10 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -66,7 +66,7 @@ final class ProbeModel: ObservableObject {
                 if audit { append("RESULT AUDIT PASS · bounded read-only observation finished and lease closed. Missing/denied observations remain inconclusive. No wallpaper installation or visibility proof.") }
                 container = path
                 // Terminal result is emitted on the UI actor, outside log backpressure.
-                if !audit { append(install ? "RESULT COPY PASS · exact approved wallpaper files copied and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
+                if !audit { append(install ? "RESULT COPY PASS · approved wallpaper copied with three normalized identity fields and read back; lease closed. Gallery visibility and activation UNVERIFIED. Existing wallpapers/preferences untouched." : (apply
                     ? "RESULT PASS · exclusive sentinel create/write/readback/ownership-checked removal and lease close completed. No wallpaper installed."
                     : "RESULT PASS · strict metadata identity verified only. No PosterBoard writes.")) }
             } catch {
@@ -159,7 +159,7 @@ struct ProbeView: View {
                 Button("Audit Gallery") { model.run(apply: false, audit: true) }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
             if model.archive != nil {
-                Text("Installation disabled in this diagnostic build")
+                Button("Test Install") { confirmInstall = true }
                     .buttonStyle(.bordered).tint(acid).disabled(model.busy)
                 Text("APPROVED ARCHIVE REQUIRED · no preference edits or respring").font(.caption2.monospaced()).foregroundStyle(acid) }
             HStack {
@@ -171,7 +171,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Audit Gallery only reads the existing copied descriptor, one same-provider sibling and gallery index. No import needed. Copy Log when finished. No install, reset or respring.")
+            Text("Standalone parity test. Import the approved Anime-Squad archive, then Test Install once and Copy Log. Any old test journal or duplicate blocks installation. Nothing is replaced or deleted. No refresh/respring; gallery visibility unverified.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -198,7 +198,7 @@ struct ProbeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Test Install") { model.run(apply: false, install: true) }
         } message: {
-            Text("Adds exactly one unchanged Anime-Squad descriptor after strict identity and duplicate checks. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
+            Text("Copies one approved Anime-Squad descriptor with archived file attributes, three normalized numeric identity fields and whole-root copy. Prior test journal or duplicate blocks the test and is never deleted. Existing wallpapers and preferences stay unchanged. No automatic activation, registration call, reset or respring. This is untested and the wallpaper picker may fail. If interrupted, preserve the InstallTests journal and do not retry. Continue?")
         }
         .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}
