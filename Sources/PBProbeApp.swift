@@ -9,7 +9,7 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · native-picker v3 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · live-discovery v4 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
@@ -25,9 +25,18 @@ final class ProbeModel: ObservableObject {
         let logger: (String) -> Void = { [weak self] line in
             DispatchQueue.main.async { self?.append(line) }
         }
+        let stallNotice = Task {
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled, busy else { return }
+            append("WATCHDOG · diagnostic still running. The last BEFORE/AFTER checkpoint identifies the pending operation. Synchronous OS calls cannot safely be force-cancelled during a Caches swap. No access success is implied; do not start a concurrent run.")
+        }
         Task {
+            defer { stallNotice.cancel() }
             do {
                 let path = try await Task.detached(priority: .userInitiated) {
+                    let progress = ProbeProgress(logger)
+                    defer { progress.finish(); withExtendedLifetime(progress) {} }
+                    logger("WORKER BEFORE discovery/canonical path")
                     let path = entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? try ProbeDiagnostics.discover(log: logger)
                         : try PosterBoardStore.canonicalContainer(entered)

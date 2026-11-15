@@ -101,15 +101,21 @@ enum ProbeDiagnostics {
         _ = identified
     }
     static func discover(log: @escaping (String) -> Void) throws -> String {
+        log("DISCOVERY BEFORE own-group query")
         var details: UnsafeMutablePointer<CChar>?
         let groupCount = hasOwnGroup(&details)
         if let details { log(String(cString: details)); freeProbeString(details) }
+        log("DISCOVERY AFTER own-group query; count=\(groupCount)")
         guard groupCount > 0 else {
             throw PosterBoardStore.failure("placard-style needs one usable own app group. See the entitlement acquisition, embedded group values and per-group containerURL results above. Cause is not established. get-task-allow is NOT required.")
         }
         // Listing a data-container parent may be denied even when exact-path
         // extensions work. Resolve UUID candidates on our own data volume first.
+        log("DISCOVERY BEFORE copyCandidateJSON; synchronous calls cannot be forcibly cancelled safely")
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        var attempts = 0
         if let pointer = copyCandidateJSON() {
+            log("DISCOVERY AFTER copyCandidateJSON")
             let json = String(cString: pointer)
             freeProbeString(pointer)
             if let data = json.data(using: .utf8),
@@ -118,13 +124,21 @@ enum ProbeDiagnostics {
                 if let error = report["error"] { log("discovery ERROR \(error)") }
                 let candidates = (report["matched"] as? [String] ?? []) + (report["unknown"] as? [String] ?? [])
                 var reportedAttempt = false
+                log("DISCOVERY candidate verification limited to 8 attempts / 20 seconds total; budget checked between calls")
                 for raw in candidates {
+                    guard attempts < 8, ProcessInfo.processInfo.systemUptime < deadline else {
+                        log("DISCOVERY verification budget reached; stopping before next access call")
+                        break
+                    }
+                    attempts += 1
+                    log("DISCOVERY BEFORE candidate \(attempts) lease acquire · \(raw)")
                     guard let path = try? PosterBoardStore.canonicalContainer(raw) else { continue }
                     var trace = ""
-                    guard let lease = try? PosterBoardLease(path: path, log: { trace += $0 }) else {
+                    guard let lease = try? PosterBoardLease(path: path, log: { trace += $0; log($0) }) else {
                         if !reportedAttempt { log(trace); reportedAttempt = true }
                         continue
                     }
+                    log("DISCOVERY AFTER candidate lease acquire")
                     var match = lease.identityAttribute() == "com.apple.PosterBoard"
                     var wrong = lease.identityAttribute().map { $0 != "com.apple.PosterBoard" } ?? false
                     for name in metadata where !wrong {
@@ -146,20 +160,7 @@ enum ProbeDiagnostics {
                 }
             }
         }
-        // Keep the old root-listing path as a bounded secondary discovery route.
-        for root in PosterBoardStore.roots {
-            guard let parent = try? PosterBoardLease(path: root) else { continue }
-            let entries = (try? FileManager.default.contentsOfDirectory(atPath: parent.effectiveURL.path)) ?? []
-            try parent.close()
-            for entry in entries.prefix(1024) where UUID(uuidString: entry) != nil {
-                let path = root + "/" + entry
-                guard let lease = try? PosterBoardLease(path: path) else { continue }
-                for name in metadata { lease.grant(name) }
-                let verified = (try? PosterBoardStore.validateIdentity(lease.effectiveURL, lease: lease)) != nil
-                try lease.close()
-                if verified { log("Root-listing candidate = \(path)"); return path }
-            }
-        }
+        log("DISCOVERY FINISHED · no verified candidate in bounded scan; legacy root-listing sweep skipped. A known canonical path bypasses scanning.")
         throw PosterBoardStore.failure("No PosterBoard candidate identified. Paste a known canonical container path to diagnose directly.")
     }
 }

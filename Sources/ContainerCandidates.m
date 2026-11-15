@@ -10,6 +10,8 @@
 #include <errno.h>
 #include <string.h>
 
+extern void mirsa_pb_progress(const char *message);
+
 static NSString *candidateIdentity(NSString *path) {
     for (NSString *key in @[@"com.apple.containermanager.identity", @"com.apple.containermanager.identifier"]) {
         char value[65537];
@@ -31,6 +33,7 @@ static NSString *candidateIdentity(NSString *path) {
 
 char *mirsa_pb_candidates_copy_json(void) {
     @autoreleasepool {
+        mirsa_pb_progress("DISCOVERY C BEFORE scratch open/fstat/fstatfs");
         NSMutableArray *unknown = [NSMutableArray array], *matched = [NSMutableArray array];
         NSMutableSet *seen = [NSMutableSet set];
         NSMutableDictionary *report = [NSMutableDictionary dictionary];
@@ -43,6 +46,7 @@ char *mirsa_pb_candidates_copy_json(void) {
         BOOL ready = fd >= 0 && fstat(fd, &file) == 0 && fstatfs(fd, &volume) == 0;
         int saved = errno;
         if (fd >= 0) { close(fd); unlink(scratch.fileSystemRepresentation); }
+        mirsa_pb_progress("DISCOVERY C AFTER own-volume setup; BEFORE inode scan (6-second cooperative budget)");
         if (!ready || file.st_ino > UINT64_MAX - 100000) {
             report[@"error"] = [NSString stringWithFormat:@"own-volume probe failed errno=%d", saved];
         } else {
@@ -52,11 +56,17 @@ char *mirsa_pb_candidates_copy_json(void) {
             uint64_t limit = file.st_ino + 100000, visited = 0;
             NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
             BOOL stopped = NO;
+            NSTimeInterval nextProgress = started + 1;
             char pathbuf[4096];
             for (uint64_t inode = 1; inode <= limit; inode++) {
                 visited = inode;
-                if ((inode & 1023) == 0 && NSProcessInfo.processInfo.systemUptime - started > 45) {
-                    stopped = YES; break;
+                NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+                if (now - started >= 6) { stopped = YES; break; }
+                if (now >= nextProgress) {
+                    NSString *status = [NSString stringWithFormat:@"DISCOVERY progress BEFORE fsgetpath inode=%llu elapsed=%.1fs UUIDs=%lu",
+                        (unsigned long long)inode, now-started, (unsigned long)seen.count];
+                    mirsa_pb_progress(status.UTF8String);
+                    nextProgress = now + 1;
                 }
                 if (fsgetpath(pathbuf, sizeof(pathbuf), &volume.f_fsid, inode) <= 0) continue;
                 @autoreleasepool {
@@ -65,7 +75,9 @@ char *mirsa_pb_candidates_copy_json(void) {
                     if (![roots containsObject:path.stringByDeletingLastPathComponent] ||
                         ![[NSUUID alloc] initWithUUIDString:path.lastPathComponent] || [seen containsObject:path]) continue;
                     [seen addObject:path];
+                    mirsa_pb_progress("DISCOVERY BEFORE candidate identity xattrs");
                     NSString *identifier = candidateIdentity(path);
+                    mirsa_pb_progress("DISCOVERY AFTER candidate identity xattrs");
                     if ([identifier isEqualToString:@"com.apple.PosterBoard"]) [matched addObject:path];
                     else if (!identifier.length && unknown.count < 1024) [unknown addObject:path];
                     // Never emit unrelated bundle identifiers or read unrelated files.
@@ -77,6 +89,7 @@ char *mirsa_pb_candidates_copy_json(void) {
             report[@"seconds"] = @(NSProcessInfo.processInfo.systemUptime - started);
             report[@"UUIDContainersSeen"] = @(seen.count);
         }
+        mirsa_pb_progress("DISCOVERY C AFTER inode scan; returning candidate report");
         NSData *data = [NSJSONSerialization dataWithJSONObject:report options:0 error:nil];
         NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         return strdup(json.UTF8String ?: "{}");

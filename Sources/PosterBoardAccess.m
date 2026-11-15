@@ -15,6 +15,18 @@
 #include <mach-o/loader.h>
 #include <libkern/OSByteOrder.h>
 
+// Synchronous, per-worker live checkpoints. Never wait for the UI queue.
+typedef void (*PBProgress)(const char *, void *);
+static _Thread_local PBProgress pbProgress;
+static _Thread_local void *pbProgressContext;
+void mirsa_pb_progress_set(PBProgress callback, void *context) {
+    pbProgress = callback; pbProgressContext = context;
+}
+void mirsa_pb_progress(const char *message) {
+    if (pbProgress) pbProgress(message, pbProgressContext);
+}
+static void checkpoint(NSString *message) { mirsa_pb_progress(message.UTF8String); }
+
 typedef void *(*Create)(void);
 typedef void (*SetNumber)(void *, uint64_t);
 typedef void (*SetObject)(void *, void *);
@@ -281,10 +293,16 @@ static int64_t queryFlags(uint64_t queryClass, NSString *identifier, BOOL isGrou
     // Match Gester: empty domain means no setter call.
     if (partDomain.length) domain(q, partDomain.UTF8String);
     flags(q, requestedFlags);
+    checkpoint([NSString stringWithFormat:@"QUERY BEFORE container_query_get_single_result strategy=%@", label]);
     void *result = one(q);
+    checkpoint([NSString stringWithFormat:@"QUERY AFTER result strategy=%@ found=%@", label, result ? @"YES" : @"NO"]);
+    checkpoint(@"QUERY BEFORE copy sandbox token");
     char *sandboxToken = result ? token(result) : NULL;
+    checkpoint(@"QUERY AFTER copy sandbox token");
     // -106 is Mirsa's missing-result/token sentinel, NOT an OS errno.
+    checkpoint(@"QUERY BEFORE consume sandbox token");
     int64_t handle = sandboxToken ? consume(sandboxToken) : -106;
+    checkpoint([NSString stringWithFormat:@"QUERY AFTER consume=%lld", (long long)handle]);
     [log appendFormat:@"strategy %@: result=%@ token=%@ consume=%lld\n", label,
         result ? @"YES" : @"NO", sandboxToken ? @"YES" : @"NO", (long long)handle];
     if (sandboxToken) free(sandboxToken);
@@ -316,9 +334,11 @@ static int64_t canonicalGrant(NSString *target, NSArray<NSString *> *groups, NSM
         NSString *cache = [library stringByAppendingPathComponent:@"Caches"];
         NSString *backup = [library stringByAppendingPathComponent:@"Caches.mirsa-pb-backup"];
         BOOL had = NO;
-        struct stat original, installed, current;
+        struct stat original, installed;
+        checkpoint(@"CACHE BEFORE create/validate own-group Library");
         BOOL ready = [fm createDirectoryAtPath:library withIntermediateDirectories:YES attributes:nil error:nil] &&
             [normalized(library.stringByResolvingSymlinksInPath) isEqualToString:normalized(library)];
+        checkpoint(@"CACHE AFTER create/validate Library; BEFORE recovery check");
         if (ready && existsNoFollow(backup, &original)) {
             NSString *old = [fm destinationOfSymbolicLinkAtPath:cache error:nil];
             struct stat cacheState;
@@ -328,29 +348,40 @@ static int64_t canonicalGrant(NSString *target, NSArray<NSString *> *groups, NSM
                 restoreCaches(cache, backup, YES, old, log);
         }
         if (ready) {
+            checkpoint(@"CACHE BEFORE preserve original Caches");
             had = existsNoFollow(cache, &original);
             ready = had ? S_ISDIR(original.st_mode) && [fm moveItemAtPath:cache toPath:backup error:nil] : errno == ENOENT;
         }
+        checkpoint(@"CACHE AFTER preserve original Caches");
         if (ready) {
-            if (symlink(target.fileSystemRepresentation, cache.fileSystemRepresentation) != 0) {
-                [log appendFormat:@"placard-style cache symlink error errno=%d\n", errno];
-                if (had && ![fm moveItemAtPath:backup toPath:cache error:nil]) last = -108;
-            } else {
-                if (!existsNoFollow(cache, &installed) || !S_ISLNK(installed.st_mode)) {
-                    last = -108; // do not remove a concurrently replaced path
+            BOOL installedLink = NO;
+            @try {
+                checkpoint(@"CACHE BEFORE install own-group Caches alias");
+                if (symlink(target.fileSystemRepresentation, cache.fileSystemRepresentation) != 0) {
+                    [log appendFormat:@"placard-style cache symlink error errno=%d\n", errno];
                 } else {
-                    last = queryFlags(7, group, YES, @"", 0x8000000000ULL, @"placard-style", log);
-                    if (last < 0 && NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26)
-                        last = queryFlags(7, group, YES, @"", 0x800000000ULL, @"placard-style-ios26", log);
-                    BOOL same = existsNoFollow(cache, &current) && S_ISLNK(current.st_mode) &&
-                        current.st_ino == installed.st_ino && current.st_dev == installed.st_dev;
-                    if (!same || !restoreCaches(cache, backup, had, target, log)) {
-                        releaseNative(last); last = -108;
-                    } else if (last >= 0) {
-                        [log appendFormat:@"placard-style canonical grant %@; own Caches restored immediately.\n", target];
+                    installedLink = YES;
+                    if (!existsNoFollow(cache, &installed) || !S_ISLNK(installed.st_mode)) {
+                        last = -108;
+                    } else {
+                        checkpoint(@"CACHE alias installed; QUERY starting (synchronous OS call, not forcibly cancellable)");
+                        last = queryFlags(7, group, YES, @"", 0x8000000000ULL, @"placard-style", log);
+                        if (last < 0 && NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26)
+                            last = queryFlags(7, group, YES, @"", 0x800000000ULL, @"placard-style-ios26", log);
                     }
                 }
+            } @finally {
+                // Run on success and every normal error/exception exit. A stuck
+                // kernel/IPC call or process kill cannot execute finally.
+                checkpoint(@"CACHE BEFORE restore original own-group Caches");
+                BOOL restored = installedLink ? restoreCaches(cache, backup, had, target, log) :
+                    (!had || [fm moveItemAtPath:backup toPath:cache error:nil]);
+                checkpoint(restored ? @"CACHE AFTER restore OK" : @"CACHE AFTER restore FAILED; backup retained, stop");
+                if (!restored) { releaseNative(last); last = -108; }
+                @synchronized(busy) { [busy removeObject:root]; }
             }
+            if (last >= 0)
+                [log appendFormat:@"placard-style canonical grant %@; own Caches restored immediately.\n", target];
         }
         @synchronized(busy) { [busy removeObject:root]; }
         if (last >= 0 || last == -108) return last;
@@ -372,8 +403,11 @@ static MirsaPBSession *acquire(NSString *target, int64_t *errorCode, NSMutableSt
     return nil;
 #else
     if (!allowed(target)) { *errorCode = -101; return nil; }
+    checkpoint(@"ACCESS BEFORE signed-group lookup");
     NSArray *groups = signedGroups(log);
+    checkpoint(@"ACCESS AFTER signed-group lookup; BEFORE placard-style grant");
     int64_t canonical = canonicalGrant(target, groups, log);
+    checkpoint([NSString stringWithFormat:@"ACCESS AFTER placard-style grant result=%lld", (long long)canonical]);
     if (canonical >= 0) {
         MirsaPBSession *lease = session(target, canonical);
         lease.canonicalGrant = YES;
