@@ -49,7 +49,7 @@ let changed = ["com.apple.posterkit.provider.descriptor.identifier",
     "versions/1/contents/7400.WWDC_2022-390w-844h@3x~iphone.wallpaper/Wallpaper.plist"]
 var normalized = ApprovedAnimeManifest.files
 for name in changed { normalized[name] = String(repeating: "a", count: 64) }
-var record: [String: Any] = ["container": "/private/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111",
+var record: [String: Any] = ["container": "/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111",
     "relative": ProbeOwnedAnimeCleanup.parentRelative + "/" + descriptor,
     "archiveSHA256": ProbeInstallTest.approvedSHA256, "sourceIdentifier": "7400", "normalizedIdentifier": 60527,
     "normalizedFiles": changed, "originalManifest": ApprovedAnimeManifest.files, "expected": normalized,
