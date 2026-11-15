@@ -9,13 +9,12 @@ struct PBProbeApp: App {
 
 @MainActor
 final class ProbeModel: ObservableObject {
-    @Published var log = "PB Probe · targeted-identity v5 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
+    @Published var log = "PB Probe · isolated-access v6 · source Mirsa 1b16937\nDiagnose does not write PosterBoard. Access acquisition temporarily swaps this app's own group Caches, consumes an exact-path token, then restores Caches immediately.\n"
     @Published var container = ""
     @Published var archive: URL?
     @Published var busy = false
     @Published var importError: String?
-    @Published var rule: IdentityRule = .strict
-
+    
     func append(_ text: String) {
         log += text + (text.hasSuffix("\n") ? "" : "\n")
         if log.utf8.count > 256_000 {
@@ -24,13 +23,9 @@ final class ProbeModel: ObservableObject {
     }
     func run(apply: Bool) {
         guard !busy else { return }
-        guard !apply else {
-            append("IDENTITY-ONLY BUILD · Apply disabled until PosterBoard identification is reviewed.")
-            return
-        }
         busy = true
-        let entered = container, selectedRule = rule
-        append("\n\(apply ? "APPLY" : "DIAGNOSE") · \(Date()) · rule=\(selectedRule.rawValue)\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
+        let entered = container
+        append("\n\(apply ? "ACCESS TEST" : "DIAGNOSE") · \(Date()) · rule=Strict\niOS \(UIDevice.current.systemVersion) · bundle \(Bundle.main.bundleIdentifier ?? "?")")
         let logBuffer = ProbeLogBuffer { [weak self] batch in
             MainActor.assumeIsolated { self?.append(batch) }
         }
@@ -53,8 +48,11 @@ final class ProbeModel: ObservableObject {
                     guard try ProbeDiagnostics.identifiesPosterBoard(path, log: logger) else {
                         throw PosterBoardStore.failure("Exact metadata did not identify PosterBoard. No root inspection performed.")
                     }
-                    // Identification-only run, no directory contents or layout reads.
-                    logger("DIAGNOSE COMPLETE · PosterBoard metadata identity verified; no root inspection or writes.")
+                    if apply {
+                        try ProbeWriteTest.run(path: path, log: logger)
+                    } else {
+                        logger("DIAGNOSE COMPLETE · PosterBoard metadata identity verified; no root inspection or writes.")
+                    }
                     return path
 
                 }.value
@@ -139,18 +137,16 @@ struct ProbeView: View {
                 .font(.caption.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(10).background(.white.opacity(0.07))
                 .disabled(model.busy)
-            Picker("Identity rule", selection: $model.rule) {
-                ForEach(IdentityRule.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).disabled(model.busy)
+            Text("STRICT IDENTITY ONLY · wallpaper installation disabled").font(.caption2.monospaced()).foregroundStyle(.gray)
             HStack(spacing: 8) {
                 Button("Import .tendies") {
                     model.append("PICKER requested")
                     picker = true
                 }
                 Button("Diagnose") { model.run(apply: false) }
-                Button("Apply") { confirm = true }.disabled(true)
+                Button("Test Access") { confirm = true }
             }.buttonStyle(.bordered).tint(acid).font(.caption.bold()).disabled(model.busy)
-            if model.archive != nil { Text("ARCHIVE READY · new UUID on every Apply").font(.caption2.monospaced()).foregroundStyle(acid) }
+            if model.archive != nil { Text("ARCHIVE READY · not installed by this access test").font(.caption2.monospaced()).foregroundStyle(acid) }
             HStack {
                 Text("SESSION LOG").font(.caption2.monospaced().bold()).foregroundStyle(.gray)
                 Spacer()
@@ -160,7 +156,7 @@ struct ProbeView: View {
                 Text(model.log).font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
             }.background(.black).overlay(Rectangle().stroke(.white.opacity(0.15)))
-            Text("Experimental. Apply adds wallpaper descriptors and updates PosterBoard preferences. Backups are kept in Files.")
+            Text("Test Access writes, reads and removes one new hidden test file. Existing wallpapers and preferences stay untouched. Diagnose remains read-only.")
                 .font(.caption2).foregroundStyle(.gray)
         }
         .padding(16).background(Color(white: 0.065)).foregroundStyle(.white)
@@ -183,11 +179,11 @@ struct ProbeView: View {
         } message: {
             Text(model.importError ?? "See session log.")
         }
-        .alert("Apply experimental wallpaper?", isPresented: $confirm) {
+        .alert("Run temporary access test?", isPresented: $confirm) {
             Button("Cancel", role: .cancel) {}
-            Button("Apply", role: .destructive) { model.run(apply: true) }
+            Button("Test Access") { model.run(apply: true) }
         } message: {
-            Text("This writes new CollectionsPoster descriptors and PosterBoard preferences using the selected identity rule. Existing descriptors stay untouched. The wallpaper picker may still need a device restart.")
+            Text("Only after strict identity checks, create one unique temporary test file in the existing PosterBoard store, verify its bytes, then remove only that file. No wallpaper is installed. A journal is saved in Files. If interrupted, the log identifies any leftover test file.")
         }
     }
 }

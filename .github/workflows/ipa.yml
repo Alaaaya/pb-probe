@@ -1,7 +1,7 @@
 name: PB Probe re-signable IPA
 on:
   push:
-    branches: [main]
+    branches: [main, "mirsa/probe-access-test"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,6 +15,10 @@ jobs:
         run: |
           clang -fobjc-arc -framework Foundation Tests/DiscoveryTargets.m -o /tmp/pb-target-tests
           /tmp/pb-target-tests
+      - name: Verify isolated write cleanup
+        run: |
+          python3 Tests/access-fixtures.py
+          swift /tmp/pb-access-fixtures.swift
       - name: Generate project
         run: |
           brew install xcodegen

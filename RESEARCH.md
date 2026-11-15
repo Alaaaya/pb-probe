@@ -37,3 +37,18 @@ Actual discovery defect: v4 returned only the first 1,024 identity-unknown roots
 v5 discards unknown roots from verification entirely. Read-only inode path enumeration recognizes only exact PosterBoard store/preferences path hints or exact PosterBoard identity xattrs. Hints are not identity proof. Only those targeted containers receive exact metadata-file tokens, never root tokens. Identification reads only the two manager metadata files with regular-file/size/symlink guards, retains only equality against MCMMetadataIdentifier=com.apple.PosterBoard, redacts other identities, and reports token/lstat/read/parse errors. A contradictory known xattr prevents even the metadata grants. Tokens always release in finally and Caches restoration stays in canonicalGrant's finally. No unrelated contents/listings are accessed.
 
 The six-second cooperative scan resumes its inode cursor on the next Diagnose rather than repeatedly examining the same early roots. One aggregate progress update per second replaces per-candidate logs. A bounded coalescing logger schedules at most one main delivery and caps pending/display text. Diagnostic completion flushes pending logs before READY/error. No forcibly cancelling in-flight IPC. This build disables Apply and stops after exact metadata identity verification, without even listing the identified container. Host-native path fixtures run in CI to reject traversal, prefix collisions, generic metadata hints and non-allowlisted roots. Device success remains unverified.
+
+## v6 isolated access stage
+Owner device v5 verified exact PosterBoard metadata repeatedly, not root/store write access.
+v6 keeps Diagnose metadata-only and introduces a separately confirmed Test Access.
+It revalidates exact metadata before root acquisition and immediately before its first write,
+requires strict identity and an existing CollectionsPoster layout, grants only selected
+store paths, and creates one hidden random non-descriptor file in the existing version
+directory. O_EXCL/O_NOFOLLOW prevents replacement, readback checks bytes, cleanup
+compares inode/device and unlinks only the new file. A local pending journal and payload
+backup survive interruption; it never sweeps leftovers or retries deletions automatically.
+If killed, a hidden sentinel can remain and requires review of the journal.
+No wallpaper descriptors, preference keys, SQLite, reset flags, imported archive contents,
+provider IDs or existing wallpapers are written. No claim of install/registration success.
+Host fixtures verify roundtrip cleanup, collision preservation and symlink rejection.
+All device access remains untested until the owner explicitly presses Test Access.
